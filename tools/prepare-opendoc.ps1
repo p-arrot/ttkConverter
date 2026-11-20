@@ -48,6 +48,7 @@ $notices = foreach ($asset in @($manifest.opendoc.notices) + @($manifest.spiderm
     Get-VerifiedAsset $asset
 }
 $worker = Join-Path $PSScriptRoot 'opendoc-shell.mjs'
+$docxRepair = Join-Path $PSScriptRoot 'opendoc-docx.mjs'
 $sourceNotice = @"
 OpenDoc WebAssembly modules are distributed under Apache-2.0. Corresponding source:
 $($manifest.opendoc.source)/tree/$($manifest.opendoc.commit)
@@ -85,6 +86,7 @@ foreach ($target in $Architecture) {
     }
     Copy-Item -LiteralPath $modules -Destination $stage -Force
     Copy-Item -LiteralPath $worker -Destination (Join-Path $stage 'convert.mjs') -Force
+    Copy-Item -LiteralPath $docxRepair -Destination $stage -Force
     Copy-Item -LiteralPath (@($notices) + $manifestPath) -Destination $licenseRoot -Force
     Set-Content -LiteralPath (Join-Path $licenseRoot 'Source-code.txt') -Value $sourceNotice -Encoding ASCII
 

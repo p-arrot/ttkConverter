@@ -8,9 +8,9 @@ ttkConverter 是一款使用 C++17 和原生 Windows 界面开发的离线转换
 
 | 对应系统 | 安装包 |
 | --- | --- |
-| Windows 10 或 Windows 11，64 位 | `ttkConverter-1.3.0-Win10-11-x64-Setup.exe` |
-| Windows 7 SP1，64 位 | `ttkConverter-1.3.0-Win7-SP1-x64-Setup.exe` |
-| Windows 7 SP1，32 位 | `ttkConverter-1.3.0-Win7-SP1-x86-Setup.exe` |
+| Windows 10 或 Windows 11，64 位 | `ttkConverter-1.3.1-Win10-11-x64-Setup.exe` |
+| Windows 7 SP1，64 位 | `ttkConverter-1.3.1-Win7-SP1-x64-Setup.exe` |
+| Windows 7 SP1，32 位 | `ttkConverter-1.3.1-Win7-SP1-x86-Setup.exe` |
 
 从 [GitHub Releases](https://github.com/p-arrot/ttkConverter/releases/latest) 下载对应安装包。安装包为当前用户安装，并自带 FFmpeg 和 OCR 引擎。Windows 7 可在「控制面板 → 系统」查看位数，用 `winver` 核对 SP1（内部版本 7601）。可用 `certutil -hashfile "安装包路径" SHA256` 对照发布页的校验值。
 
@@ -24,7 +24,7 @@ ttkConverter 是一款使用 C++17 和原生 Windows 界面开发的离线转换
 - 选中带音轨的视频，点「提取音频」即可切到音频输出。默认 MP3，可改选 WAV、FLAC、M4A 等。点「转回视频」可恢复视频输出。
 - 图片可选原始尺寸、长边 320 至 3840 像素或自定义宽高。有损格式另有画质档位。ICO 提供 16 至 256 像素的方形尺寸预设，有需要时用透明区域填充。
 - 音频按输出格式提供采样率。支持有损码率的格式可选自动或 32 至 320 kb/s 的常用档位，可用码率随编码和采样率更新。选择自动码率时由音质档位决定压缩程度。
-- PDF 转 Word 默认「可编辑文字」。对于各页均有文字层的 PDF，OpenDoc 离线保留页面和图文位置，把正文保存为可编辑文本框。表格线和流程图按原位置重建。表格外观可保留，单元格不一定会生成 Word 原生表格。
+- PDF 转 Word 默认「可编辑文字」。对于各页均有文字层的 PDF，OpenDoc 离线保留页面和图文位置，把正文保存为可编辑文本框。保存时校验原稿页数并清理会影响 Word 读取的非法字体字符。表格线和流程图按原位置重建。表格外观可保留，单元格不一定会生成 Word 原生表格。
 - 含扫描页的 PDF 会提取已有文字层，并用 Tesseract 识别扫描页。OCR 提供 200、300、400 DPI，改进双栏阅读顺序、标题和简单表格。也可在高级设置中强制整份 PDF 进行 OCR。OpenDoc 排版需要支持 SSE4.1 的处理器，运行时不可用时会使用基础排版。
 - 「保留原版式」以整页图片保留颜色、位置和横竖方向。可在 Word 中编辑整页图片，清晰度可选 150、200、300 或 400 DPI。
 - 可以随时添加文件、更改未开始的任务和保存位置，再点击「开始转换」。默认结果写到源文件旁的「ttkConverter 输出」文件夹。同名输出自动加序号。通过「任务操作」可以打开结果、查看失败详情或重试。

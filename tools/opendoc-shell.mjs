@@ -1,3 +1,5 @@
+import {sanitizeDocx} from './opendoc-docx.mjs';
+
 // The application supplies a private working directory with these ASCII names.
 const requestFile = 'opendoc-job.json';
 const inputFile = 'input.pdf';
@@ -102,13 +104,16 @@ function provideCharacterMaps(pdf, names, provided) {
     return count;
 }
 
-function convert(core, pdf, source, preserveLayout) {
+function convert(core, pdf, source, preserveLayout, expectedPages) {
     const provided = new Set();
     let reported = 0;
     // Restart with the newly supplied maps when the PDF requests them mid-page.
     for (let attempt = 0; attempt < 3; ++attempt) {
         const job = pdf.beginPdfImport(source);
         try {
+            if (expectedPages !== null && job.pageCount !== expectedPages) {
+                throw new Error('OpenDoc counted ' + job.pageCount + ' of ' + expectedPages + ' PDF pages.');
+            }
             provideCharacterMaps(pdf, job.missingCMaps, provided);
             while (job.status === 'pending') {
                 const lastPage = job.pagesDone;
@@ -118,10 +123,13 @@ function convert(core, pdf, source, preserveLayout) {
                 }
                 while (reported < job.pagesDone) print('page=' + (++reported) + '/' + job.pageCount);
             }
+            if (job.status !== 'done' || job.pagesDone !== job.pageCount || job.pageCount === 0) {
+                throw new Error('OpenDoc did not import all PDF pages.');
+            }
             const pages = preserveLayout ? job.finish() : job.finishReflowed();
             const document = preserveLayout ? core.openPdfImport(pages, source) : core.openPdfReflow(pages, source);
             try {
-                return document.exportDocx();
+                return sanitizeDocx(document.exportDocx(), preserveLayout ? job.pageCount : null);
             } finally {
                 document.free();
             }
@@ -135,14 +143,17 @@ function convert(core, pdf, source, preserveLayout) {
 }
 
 try {
-    const {mode} = JSON.parse(read(requestFile).replace(/^\uFEFF/, ''));
+    const {mode, expectedPages = null} = JSON.parse(read(requestFile).replace(/^\uFEFF/, ''));
     if (mode !== 'fixed' && mode !== 'reflow') throw new Error('Expected fixed or reflow conversion mode.');
+    if (expectedPages !== null && (!Number.isSafeInteger(expectedPages) || expectedPages < 1)) {
+        throw new Error('Expected a positive PDF page count.');
+    }
     const core = await import('./casual_doc_wasm.mjs');
     const pdf = await import('./casual_doc_wasm_pdf.mjs');
     core.initSync({module: readEngineAsset('casual_doc_wasm_bg.wasm')});
     pdf.initSync({module: readEngineAsset('casual_doc_wasm_pdf_bg.wasm')});
     pdf.setFaceHost({face: (family, bold, italic) => core.bundledFace(family, bold, italic)});
-    const result = convert(core, pdf, read(inputFile, 'binary'), mode === 'fixed');
+    const result = convert(core, pdf, read(inputFile, 'binary'), mode === 'fixed', expectedPages);
     if (!result.length) throw new Error('OpenDoc produced an empty Word document.');
     os.file.writeTypedArrayToFile(outputFile, result);
 } catch (error) {

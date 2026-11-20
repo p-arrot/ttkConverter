@@ -530,10 +530,10 @@ bool isDocxPackage(const fs::path& path) {
 }
 
 bool tryStructuredPdf(const fs::path& runtime, const fs::path& worker, const fs::path& scratch,
-                      const fs::path& output, const Cancel& cancel, const Progress& progress) {
+                      const fs::path& output, int pages, const Cancel& cancel, const Progress& progress) {
     const auto resultFile = scratch / L"output.docx";
     std::ofstream settings(scratch / L"opendoc-job.json", std::ios::binary);
-    settings << R"({"mode":"fixed"})";
+    settings << R"({"mode":"fixed","expectedPages":)" << pages << '}';
     settings.close();
     if (!settings) return false;
     if (progress) progress(5, L"正在重建可编辑文字和原稿版式");
@@ -756,7 +756,8 @@ bool hasStructuredPdfEngine() {
     const auto runtime = enginePath(L"pdf/opendoc/js.exe");
     const auto worker = enginePath(L"pdf/opendoc/convert.mjs");
     std::error_code error;
-    return !runtime.empty() && fs::is_regular_file(runtime, error) && fs::is_regular_file(worker, error);
+    return !runtime.empty() && fs::is_regular_file(runtime, error) && fs::is_regular_file(worker, error) &&
+        fs::is_regular_file(worker.parent_path() / L"opendoc-docx.mjs", error);
 }
 
 Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::path& scratch,
@@ -788,7 +789,7 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
             if (hasStructuredPdfEngine() &&
                 std::all_of(textPages.begin(), textPages.end(), hasUsableText)) {
                 if (tryStructuredPdf(enginePath(L"pdf/opendoc/js.exe"), enginePath(L"pdf/opendoc/convert.mjs"),
-                                     scratch, temporaryOutput, cancel, progress)) {
+                                     scratch, temporaryOutput, pages, cancel, progress)) {
                     return {true, false, L"已按原稿布局生成可编辑 Word 文件。", {}, temporaryOutput};
                 }
                 structuredFailed = true;

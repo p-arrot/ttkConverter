@@ -76,7 +76,7 @@ Get-ChildItem -LiteralPath $PdfPayload | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $pdfEngines -Force -Recurse
 }
 if ($PdfLayoutPayload) {
-    foreach ($name in @('js.exe', 'convert.mjs')) {
+    foreach ($name in @('js.exe', 'convert.mjs', 'opendoc-docx.mjs')) {
         if (!(Test-Path -LiteralPath (Join-Path $PdfLayoutPayload $name) -PathType Leaf)) {
             throw "Missing $name in $PdfLayoutPayload"
         }

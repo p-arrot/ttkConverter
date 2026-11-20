@@ -142,6 +142,64 @@ def read_docx(path):
         return "\n".join(node.text for node in body.iter(W + "t") if node.text), body
 
 
+def check_opendoc_xml_repair(engine, directory):
+    source = directory / "invalid-font.docx"
+    repaired = directory / "repaired-font.docx"
+    harness = directory / "repair-test.mjs"
+    document = (
+        f'<w:document xmlns:w="{W[1:-1]}"><w:body>'
+        '<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>First page</w:t></w:r></w:p>'
+        '<w:p><w:r><w:rPr><w:rFonts w:ascii="Test宋体"/></w:rPr>'
+        '<w:t>Second page 第二页</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'
+    ).encode("utf-8")
+    relationships = (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rId1" Target="word/document.xml" '
+        b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"/>'
+        b'</Relationships>'
+    )
+    content_types = (
+        b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        b'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        b'<Default Extension="bin" ContentType="application/octet-stream"/>'
+        b'<Override PartName="/word/document.xml" '
+        b'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        b'</Types>'
+    )
+    media = bytes(range(32)) + "\ufffe\uffff".encode("utf-8")
+    with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", relationships.replace(b"document.xml", "document\x1e\ufffe.xml".encode("utf-8")))
+        archive.writestr("word/document.xml", document.replace(b"Test", b"Te\x00\x06st"))
+        archive.writestr("word/media/sample.bin", media)
+    harness.write_text(
+        """const [modulePath, input, output] = scriptArgs;
+const {sanitizeDocx} = await import(modulePath);
+const original = read(input, 'binary');
+let failure;
+try {
+    sanitizeDocx(original.slice(), 3);
+} catch (error) {
+    failure = error.message;
+}
+if (!failure?.endsWith('expected 3 page sections, got 2')) {
+    throw new Error('Incorrect page count was not rejected: ' + failure);
+}
+os.file.writeTypedArrayToFile(output, sanitizeDocx(original, 2));
+""", encoding="utf-8",
+    )
+    run(engine / "js.exe", "-m", harness, "--", engine / "opendoc-docx.mjs", source, repaired)
+    text, body = read_docx(repaired)
+    assert len(list(body.iter(W + "sectPr"))) == 2
+    assert text.splitlines() == ["First page", "Second page 第二页"]
+    with zipfile.ZipFile(repaired) as archive:
+        assert archive.read("[Content_Types].xml") == content_types
+        assert archive.read("_rels/.rels") == relationships
+        assert archive.read("word/media/sample.bin") == media
+        assert archive.read("word/document.xml") == document
+    print("PASS OpenDoc repairs invalid XML, preserves both pages and media, and rejects a section mismatch", flush=True)
+
+
 def check_pdf_layout(app, source, output, *, landscape_second=False):
     path = convert(app, "pdf-docx", source, output, "--pdf-mode", "layout", "--page-dpi", "150")
     _, body = read_docx(path)
@@ -344,7 +402,10 @@ def smoke(app, directory, fixtures, exhaustive):
     assert original and original == run(*hash_packets, remuxed), "Video packets changed during remux"
     print("PASS lossless remux", flush=True)
 
-    structured_engine = (app.parent / "engines" / "pdf" / "opendoc" / "convert.mjs").is_file()
+    opendoc = app.parent / "engines" / "pdf" / "opendoc"
+    structured_engine = (opendoc / "convert.mjs").is_file()
+    if structured_engine:
+        check_opendoc_xml_repair(opendoc, directory)
     text, body = read_docx(convert(app, "pdf-docx", fixtures / "可编辑文本.pdf", output))
     compact_text = "".join(text.split())
     assert "EditablePDFsample" in compact_text and "文字测试" in compact_text, text
