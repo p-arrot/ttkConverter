@@ -6,6 +6,7 @@
 #include <array>
 #include <cwchar>
 #include <cwctype>
+#include <string_view>
 #include <system_error>
 
 namespace ttk {
@@ -284,7 +285,11 @@ SourceInfo identify(const fs::path& input, const Cancel& cancel) {
     std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t ch) {
         return static_cast<wchar_t>(std::towlower(ch));
     });
-    if (extension == L".pdf") return {Kind::Pdf, false, {}};
+    if (extension == L".pdf") {
+        SourceInfo info;
+        info.kind = Kind::Pdf;
+        return info;
+    }
     return probeMedia(input, cancel);
 }
 
@@ -351,9 +356,18 @@ int runHeadless(const std::vector<std::wstring>& arguments) {
         for (const auto& preset : presets()) writeOutput(preset.id + L"\t" + preset.extension + L"\t" + preset.label);
         return 0;
     }
-    if (arguments.size() == 2 && arguments.front() == L"--probe") {
+    const bool probeDetails = arguments.size() == 3 && arguments[2] == L"--details";
+    if ((arguments.size() == 2 || probeDetails) && arguments.front() == L"--probe") {
         const auto info = identify(arguments[1], cancel);
         writeOutput(defaultPreset(info.kind, info.animated) + L"\t" + info.detail);
+        if (probeDetails) {
+            writeOutput(L"container\t" + info.container);
+            writeOutput(L"video_codec\t" + info.videoCodec);
+            writeOutput(L"audio_codec\t" + info.audioCodec);
+            writeOutput(L"width\t" + std::to_wstring(info.width));
+            writeOutput(L"height\t" + std::to_wstring(info.height));
+            writeOutput(std::wstring{L"has_audio\t"} + (info.hasAudio ? L"1" : L"0"));
+        }
         return info.kind == Kind::Unknown ? 1 : 0;
     }
     if (arguments.size() >= 4 && arguments.front() == L"--convert") {
@@ -365,9 +379,54 @@ int runHeadless(const std::vector<std::wstring>& arguments) {
             else if (arguments[index] == L"--fast") job.options.quality = 0;
             else if (arguments[index] == L"--hardware") job.options.hardware = true;
             else if (arguments[index] == L"--cancel-on-progress") cancelOnProgress = true;
-            else {
-                writeOutput(L"未知参数 " + arguments[index], STD_ERROR_HANDLE);
-                return 2;
+            else if (arguments[index] == L"--quality" && index + 1 < arguments.size()) {
+                constexpr std::array<std::wstring_view, 6> qualities{
+                    L"fast", L"balanced", L"smaller", L"low", L"high", L"very-low"};
+                const std::wstring_view name = arguments[++index];
+                const auto quality = std::find(qualities.begin(), qualities.end(), name);
+                if (quality == qualities.end()) {
+                    writeOutput(L"无效的画质预设。", STD_ERROR_HANDLE);
+                    return 2;
+                }
+                job.options.quality = static_cast<int>(quality - qualities.begin());
+            } else if (arguments[index] == L"--resolution" && index + 1 < arguments.size()) {
+                const auto& value = arguments[++index];
+                wchar_t* end = nullptr;
+                const auto resolution = std::wcstol(value.c_str(), &end, 10);
+                constexpr std::array<long, 10> supported{0, 144, 240, 360, 480, 540, 720, 1080, 1440, 2160};
+                if (end == value.c_str() || *end || std::find(supported.begin(), supported.end(), resolution) == supported.end()) {
+                    writeOutput(L"无效的分辨率预设。请选择 0、144、240、360、480、540、720、1080、1440 或 2160。", STD_ERROR_HANDLE);
+                    return 2;
+                }
+                job.options.resolution = static_cast<int>(resolution);
+            } else {
+                struct NumericSetting {
+                    std::wstring_view flag;
+                    int Options::*field;
+                    long maximum;
+                };
+                constexpr std::array<NumericSetting, 4> settings{{
+                    {L"--image-size", &Options::imageLongEdge, 16384},
+                    {L"--audio-bitrate", &Options::audioKbps, 8192},
+                    {L"--sample-rate", &Options::audioSampleRate, 192000},
+                    {L"--ocr-dpi", &Options::ocrDpi, 400},
+                }};
+                const auto& flag = arguments[index];
+                const auto setting = std::find_if(settings.begin(), settings.end(), [&](const auto& candidate) {
+                    return candidate.flag == flag;
+                });
+                if (setting == settings.end() || index + 1 == arguments.size()) {
+                    writeOutput(L"未知参数或缺少参数值 " + flag, STD_ERROR_HANDLE);
+                    return 2;
+                }
+                const auto& value = arguments[++index];
+                wchar_t* end = nullptr;
+                const auto number = std::wcstol(value.c_str(), &end, 10);
+                if (end == value.c_str() || *end || number < 0 || number > setting->maximum) {
+                    writeOutput(L"无效的数值 " + flag, STD_ERROR_HANDLE);
+                    return 2;
+                }
+                job.options.*(setting->field) = static_cast<int>(number);
             }
         }
         Progress onProgress;
@@ -384,7 +443,7 @@ int runHeadless(const std::vector<std::wstring>& arguments) {
         writeOutput(result.message + L"\r\n" + result.technical, STD_ERROR_HANDLE);
         return result.cancelled ? 130 : 1;
     }
-    writeOutput(L"ttkConverter --formats | --probe INPUT | --convert PRESET INPUT OUTPUT_DIRECTORY", STD_ERROR_HANDLE);
+    writeOutput(L"ttkConverter --formats | --probe INPUT [--details] | --convert PRESET INPUT OUTPUT_DIRECTORY [OPTIONS]", STD_ERROR_HANDLE);
     return 2;
 }
 

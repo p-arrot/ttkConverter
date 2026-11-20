@@ -32,7 +32,8 @@ constexpr int headingFontResource = 104;
 constexpr wchar_t headingFace[] = L"ttk Rounded";
 
 enum Command {
-    Add = 1000, Filter, Queue, TaskActions, Remove, Preset, Quality, Advanced, OutputPath,
+    Add = 1000, Filter, Queue, TaskActions, Remove, Preset, Quality, Resolution, ExtractAudio,
+    SampleRate, Advanced, OutputPath,
     Browse, Start, StartSelected, Stop, Retry, Open, Details,
 };
 
@@ -49,6 +50,9 @@ struct Task {
     ttk::Result result;
 };
 
+enum class AudioAction { None, Extract, RestoreVideo };
+enum class SettingChange { Preset, Quality, Advanced };
+
 struct WorkResult {
     ttk::SourceInfo source;
     ttk::Result conversion;
@@ -57,6 +61,142 @@ struct WorkResult {
 constexpr std::array<Kind, 5> filters{
     Kind::Unknown, Kind::Video, Kind::Audio, Kind::Image, Kind::Pdf
 };
+
+struct ResolutionChoice {
+    int shortSide;
+    const wchar_t* label;
+};
+
+constexpr std::array<ResolutionChoice, 10> resolutions{{
+    {0, L"原始"}, {144, L"144p"}, {240, L"240p"}, {360, L"360p"}, {480, L"480p"},
+    {540, L"540p"}, {720, L"720p"}, {1080, L"1080p"}, {1440, L"1440p"}, {2160, L"4K"},
+}};
+
+constexpr std::array<int, 8> imageEdges{{0, 320, 640, 960, 1280, 1920, 2560, 3840}};
+constexpr std::array<int, 7> iconEdges{{0, 16, 32, 48, 64, 128, 256}};
+constexpr int customSize = -1;
+
+struct OptionItem {
+    int value;
+    std::wstring label;
+};
+
+struct OptionMenu {
+    const wchar_t* caption = L"";
+    int ttk::Options::*member = nullptr;
+    std::vector<OptionItem> items;
+};
+
+std::wstring sampleRateLabel(int rate) {
+    if (!rate) return L"自动";
+    std::wstring label = std::to_wstring(rate / 1000);
+    if (const int remainder = rate % 1000; remainder != 0) {
+        auto decimals = std::to_wstring(1000 + remainder).substr(1);
+        while (decimals.back() == L'0') decimals.pop_back();
+        label += L"." + decimals;
+    }
+    return label + L" kHz";
+}
+
+template <std::size_t Size>
+bool contains(const std::array<int, Size>& values, int value) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+bool imageQuality(const ttk::Preset& preset) {
+    return preset.id == L"jpg" || preset.id == L"webp" || preset.id == L"avif";
+}
+
+bool permitsQuality(const ttk::Preset& preset) {
+    switch (preset.kind) {
+    case Kind::Video: return true;
+    case Kind::Image: return imageQuality(preset);
+    case Kind::Audio: return ttk::hasAdjustableAudioBitrate(preset.id);
+    default: return false;
+    }
+}
+
+bool permitsAdvanced(const ttk::Preset& preset) {
+    return preset.id != L"ico";
+}
+
+bool sizeMenu(const OptionMenu& menu) {
+    return menu.member == &ttk::Options::resolution || menu.member == &ttk::Options::imageLongEdge;
+}
+
+std::pair<OptionMenu, OptionMenu> inlineMenus(const ttk::Preset& preset, const ttk::Options& options) {
+    OptionMenu primary;
+    OptionMenu secondary;
+    switch (preset.kind) {
+    case Kind::Video:
+        primary = {L"分辨率", &ttk::Options::resolution, {}};
+        for (const auto& resolution : resolutions) {
+            primary.items.push_back({resolution.shortSide, resolution.label});
+        }
+        primary.items.push_back({customSize, L"自定义…"});
+        break;
+    case Kind::Image:
+        primary = {L"尺寸", &ttk::Options::imageLongEdge, {}};
+        if (preset.id == L"ico") {
+            primary.items.push_back({0, L"自动（最大 256）"});
+            for (const int edge : iconEdges) {
+                if (!edge) continue;
+                const auto pixels = std::to_wstring(edge);
+                primary.items.push_back({edge, pixels + L"×" + pixels});
+            }
+        } else {
+            primary.items.push_back({0, L"原始"});
+            for (const int edge : imageEdges) {
+                if (edge) primary.items.push_back({edge, L"长边 " + std::to_wstring(edge)});
+            }
+            primary.items.push_back({customSize, L"自定义…"});
+        }
+        break;
+    case Kind::Audio: {
+        const auto rates = ttk::audioSampleRates(preset.id);
+        const bool adjustable = ttk::hasAdjustableAudioBitrate(preset.id);
+        if (rates.size() > 1) {
+            auto& menu = adjustable ? secondary : primary;
+            menu = {L"采样率", &ttk::Options::audioSampleRate, {}};
+            for (const int rate : rates) menu.items.push_back({rate, sampleRateLabel(rate)});
+        }
+        if (adjustable) {
+            primary = {L"码率", &ttk::Options::audioKbps, {{0, L"自动"}}};
+            for (const int rate : ttk::audioBitrates(preset.id, options.audioSampleRate)) {
+                primary.items.push_back({rate, std::to_wstring(rate) + L" kb/s"});
+            }
+        }
+        break;
+    }
+    case Kind::Pdf:
+        primary = {L"OCR 精度", &ttk::Options::ocrDpi,
+                   {{200, L"200 DPI"}, {300, L"300 DPI"}, {400, L"400 DPI"}}};
+        break;
+    default:
+        break;
+    }
+    return {std::move(primary), std::move(secondary)};
+}
+
+struct QualityChoice {
+    int value;
+    const wchar_t* picture;
+    const wchar_t* audio;
+};
+
+constexpr std::array<QualityChoice, 6> qualities{{
+    {0, L"快速", L"快速"},
+    {4, L"高画质", L"高音质"},
+    {1, L"平衡", L"平衡"},
+    {2, L"较小体积", L"较小体积"},
+    {3, L"低画质", L"低音质"},
+    {5, L"极低画质", L"极低音质"},
+}};
+
+bool editable(const Task& task) {
+    return task.phase == Phase::Ready || task.phase == Phase::Failed ||
+           task.phase == Phase::Cancelled;
+}
 
 const wchar_t* kindName(Kind kind) {
     switch (kind) {
@@ -76,8 +216,74 @@ const ttk::Preset* findPreset(const std::wstring& id) {
     return found == presets.end() ? nullptr : &*found;
 }
 
-bool accepts(Kind source, Kind target) {
-    return source == target || (source == Kind::Video && target == Kind::Audio);
+Kind outputKind(const Task& task) {
+    const auto* preset = findPreset(task.job.preset);
+    return preset ? preset->kind : Kind::Unknown;
+}
+
+void setOutput(Task& task, const ttk::Preset& preset) {
+    auto& options = task.job.options;
+    if (task.source.kind == Kind::Video && outputKind(task) != preset.kind) {
+        options.remux = false;
+        if (preset.kind == Kind::Audio) {
+            options.width = 0;
+            options.height = 0;
+            options.resolution = 0;
+            options.videoKbps = 0;
+            options.hardware = false;
+        }
+    }
+    if (preset.kind == Kind::Image) {
+        if (preset.id == L"ico") {
+            options.width = 0;
+            options.height = 0;
+            if (!contains(iconEdges, options.imageLongEdge)) options.imageLongEdge = 0;
+        } else if (!contains(imageEdges, options.imageLongEdge)) {
+            options.imageLongEdge = 0;
+        }
+    }
+    if (preset.kind == Kind::Audio) {
+        if (options.audioSampleRate) {
+            const auto rates = ttk::audioSampleRates(preset.id);
+            if (std::find(rates.begin(), rates.end(), options.audioSampleRate) == rates.end()) {
+                options.audioSampleRate = 0;
+            }
+        }
+        if (!ttk::supportsAudioBitrate(preset.id, options.audioSampleRate, options.audioKbps)) {
+            options.audioKbps = 0;
+        }
+    } else if (preset.kind == Kind::Video) {
+        options.audioSampleRate = 0;
+    }
+    task.job.preset = preset.id;
+}
+
+int resolutionIndex(const ttk::Options& options) {
+    if (options.width || options.height) return static_cast<int>(resolutions.size());
+    const auto found = std::find_if(resolutions.begin(), resolutions.end(), [&](const auto& item) {
+        return item.shortSide == options.resolution;
+    });
+    return found == resolutions.end() ? 0 : static_cast<int>(found - resolutions.begin());
+}
+
+std::wstring describeSource(const Task& task) {
+    if (task.phase == Phase::Checking) return L"正在识别源文件…";
+    if (task.source.kind == Kind::Unknown) return L"源文件：格式未识别";
+    if (task.source.kind == Kind::Pdf) return L"源文件：PDF";
+    std::wstring info = task.source.container;
+    const auto add = [&](const std::wstring& value) {
+        if (value.empty()) return;
+        if (!info.empty()) info += L" · ";
+        info += value;
+    };
+    add(task.source.videoCodec);
+    if (task.source.width > 0 && task.source.height > 0) {
+        add(std::to_wstring(task.source.width) + L"×" + std::to_wstring(task.source.height));
+    }
+    add(task.source.audioCodec);
+    if (task.source.kind == Kind::Video && !task.source.hasAudio) add(L"无音轨");
+    if (info.empty()) info = kindName(task.source.kind);
+    return L"源文件：" + info;
 }
 
 bool commonPreset(const ttk::Preset& preset) {
@@ -93,22 +299,28 @@ struct NumericOption {
     int id;
     int labelId;
     const wchar_t* label;
+    const wchar_t* display;
     int maximum;
     int ttk::Options::*member;
 };
 
 constexpr NumericOption numbers[] = {
-    {UI_ADVANCED_WIDTH, UI_ADVANCED_WIDTH_LABEL, L"宽度", 16384, &ttk::Options::width},
-    {UI_ADVANCED_HEIGHT, UI_ADVANCED_HEIGHT_LABEL, L"高度", 16384, &ttk::Options::height},
-    {UI_ADVANCED_VIDEO_RATE, UI_ADVANCED_VIDEO_RATE_LABEL, L"视频码率", 500000, &ttk::Options::videoKbps},
-    {UI_ADVANCED_AUDIO_RATE, UI_ADVANCED_AUDIO_RATE_LABEL, L"音频码率", 2000, &ttk::Options::audioKbps},
-    {UI_ADVANCED_CHANNELS, UI_ADVANCED_CHANNELS_LABEL, L"声道", 8, &ttk::Options::channels},
-    {UI_ADVANCED_THREADS, UI_ADVANCED_THREADS_LABEL, L"线程", 64, &ttk::Options::threads},
+    {UI_ADVANCED_WIDTH, UI_ADVANCED_WIDTH_LABEL, L"宽度", L"宽度（像素）", 16384, &ttk::Options::width},
+    {UI_ADVANCED_HEIGHT, UI_ADVANCED_HEIGHT_LABEL, L"高度", L"高度（像素）", 16384, &ttk::Options::height},
+    {UI_ADVANCED_VIDEO_RATE, UI_ADVANCED_VIDEO_RATE_LABEL, L"视频码率", L"视频 kb/s",
+        500000, &ttk::Options::videoKbps},
+    {UI_ADVANCED_AUDIO_RATE, UI_ADVANCED_AUDIO_RATE_LABEL, L"音频码率", L"音频 kb/s",
+        2000, &ttk::Options::audioKbps},
+    {UI_ADVANCED_CHANNELS, UI_ADVANCED_CHANNELS_LABEL, L"声道", L"音频声道", 8, &ttk::Options::channels},
+    {UI_ADVANCED_THREADS, UI_ADVANCED_THREADS_LABEL, L"线程", L"编码线程", 64, &ttk::Options::threads},
 };
 
 struct AdvancedDraft {
     Kind kind;
     ttk::Options options;
+    bool focusSize = false;
+    bool audioBitrate = true;
+    std::wstring presetId;
 };
 
 bool numericEnabled(int id, Kind target) {
@@ -116,6 +328,11 @@ bool numericEnabled(int id, Kind target) {
     const bool audio = video || target == Kind::Audio;
     if (id == UI_ADVANCED_WIDTH || id == UI_ADVANCED_HEIGHT) return video || target == Kind::Image;
     return id == UI_ADVANCED_VIDEO_RATE ? video : audio;
+}
+
+bool numericEnabled(const NumericOption& field, const AdvancedDraft& draft) {
+    return numericEnabled(field.id, draft.kind) &&
+           (field.id != UI_ADVANCED_AUDIO_RATE || draft.audioBitrate);
 }
 
 bool highContrast() {
@@ -341,8 +558,6 @@ private:
     RECT footerBox_{};
     RECT brandBox_{};
     RECT illustrationBox_{};
-    std::array<RECT, 3> stepBoxes_{};
-    int step_ = 0;
     HWND title_ = nullptr;
     HWND instruction_ = nullptr;
     HWND queueTitle_ = nullptr;
@@ -355,8 +570,14 @@ private:
     HWND presetLabel_ = nullptr;
     HWND preset_ = nullptr;
     HWND fixedPreset_ = nullptr;
+    HWND source_ = nullptr;
     HWND qualityLabel_ = nullptr;
     HWND quality_ = nullptr;
+    HWND resolutionLabel_ = nullptr;
+    HWND resolution_ = nullptr;
+    HWND sampleRateLabel_ = nullptr;
+    HWND sampleRate_ = nullptr;
+    HWND extract_ = nullptr;
     HWND advanced_ = nullptr;
     HWND pathLabel_ = nullptr;
     HWND path_ = nullptr;
@@ -366,6 +587,8 @@ private:
     HWND stop_ = nullptr;
     HWND hint_ = nullptr;
     ttk::Options draftOptions_;
+    OptionMenu primaryOption_;
+    OptionMenu secondaryOption_;
 
     fs::path settings_ = settingsFile();
     std::map<TaskId, Task> tasks_;
@@ -376,6 +599,7 @@ private:
     std::deque<TaskId> scheduled_;
     std::vector<const ttk::Preset*> choices_;
     bool morePresets_ = false;
+    AudioAction audioAction_ = AudioAction::None;
     bool rebuilding_ = false;
     bool closing_ = false;
     bool probing_ = false;
@@ -428,14 +652,19 @@ private:
     void renderRows();
     void refreshRow(TaskId id);
     void syncSelection(bool allPresets = false);
+    void updateQualityChoices(Kind target);
+    void updateInlineMenus();
+    void applyInlineOption(const OptionMenu& menu, HWND combo);
     void refreshButtons();
     void refreshStatus();
     void pickFiles();
     void dropped(HDROP drop);
     void addFiles(const std::vector<fs::path>& files);
     void pickDirectory();
-    void applySettings();
-    void editAdvanced();
+    const ttk::Preset* selectedPreset() const;
+    void applySettings(SettingChange change);
+    void toggleAudioOutput();
+    void editAdvanced(bool focusSize = false);
     static INT_PTR CALLBACK advancedDialog(HWND dialog, UINT message, WPARAM wp, LPARAM lp);
     void requestStart(bool selectedOnly);
     void startWork();
@@ -480,16 +709,18 @@ void Window::createControls() {
     }
     empty_ = label(L"把文件拖到这里", SS_CENTER);
     emptyFormats_ = label(L"支持同时添加视频、音频、图片和 PDF", SS_CENTER);
+    source_ = label(L"");
     presetLabel_ = label(L"输出格式");
     preset_ = combo(Preset);
     fixedPreset_ = label(L"Word 文档（.docx）");
     qualityLabel_ = label(L"质量");
     quality_ = combo(Quality);
-    addChoice(quality_, L"快速");
-    addChoice(quality_, L"平衡");
-    addChoice(quality_, L"较小体积");
-    selectChoice(quality_, 1);
     advanced_ = button(L"高级设置…", Advanced);
+    resolutionLabel_ = label(L"分辨率");
+    resolution_ = combo(Resolution);
+    sampleRateLabel_ = label(L"采样率");
+    sampleRate_ = combo(SampleRate);
+    extract_ = button(L"提取音频", ExtractAudio);
     hint_ = label(L"");
     pathLabel_ = label(L"保存到");
     path_ = control(WC_EDITW, L"", WS_TABSTOP | ES_AUTOHSCROLL,
@@ -587,29 +818,30 @@ void Window::layout() {
     const int pad = compact ? 15 : 24;
     const int content = width - 2 * pad;
     const int headerY = compact ? 11 : 19;
-    const int stepY = headerY + 63;
     const bool hasTasks = !tasks_.empty();
-    const int queueY = hasTasks ? stepY + 45 : stepY + 2;
+    const int queueY = headerY + 65;
     const int footerY = height - pad - 87;
     const auto ids = selection();
-    const bool showSettings = !choices_.empty();
-    const int presetIndex = choice(preset_);
-    const bool fixedFormat = presetIndex >= 0 &&
-        static_cast<std::size_t>(presetIndex) < choices_.size() &&
-        choices_[static_cast<std::size_t>(presetIndex)]->kind == Kind::Pdf;
+    const auto* preset = selectedPreset();
+    const bool showSource = !ids.empty();
+    const bool showSettings = preset != nullptr;
+    const bool fixedFormat = preset && preset->kind == Kind::Pdf;
+    const bool showQuality = preset && permitsQuality(*preset);
+    const bool showAdvanced = preset && permitsAdvanced(*preset);
+    const bool showPrimary = showSettings && primaryOption_.member != nullptr;
+    const bool showSecondary = showSettings && secondaryOption_.member != nullptr;
+    const bool showExtract = audioAction_ != AudioAction::None;
+    const bool hasHint = !showSecondary && GetWindowTextLengthW(hint_) != 0;
+    const bool extraRow = showSettings && (showPrimary || showExtract || hasHint);
     const bool batchActive = !scheduled_.empty() || (active_ && !probing_);
     const bool showRows = hasTasks && ListView_GetItemCount(queue_) > 0;
-    const int settingsY = footerY - 80;
-    const int queueBottom = !hasTasks ? height - pad : (showSettings ? settingsY : footerY) - 10;
+    const int settingsHeight = !showSource ? 0 : !showSettings ? 43 : extraRow ? 110 : 76;
+    const int settingsY = footerY - settingsHeight - 10;
+    const int queueBottom = !hasTasks ? height - pad : (showSource ? settingsY : footerY) - 10;
 
     brandBox_ = box(pad, headerY + 2, 51, 51);
     place(title_, pad + 64, headerY - 2, content - 64, 41);
     place(instruction_, pad + 65, headerY + 39, content - 65, 19);
-    const int stepWidth = (content - 16) / 3;
-    for (int index = 0; index < 3; ++index) {
-        stepBoxes_[index] = hasTasks ? box(pad + index * (stepWidth + 8), stepY,
-            index == 2 ? content - 2 * (stepWidth + 8) : stepWidth, 32) : RECT{};
-    }
     queueBox_ = box(pad, queueY, content, queueBottom - queueY);
     const int queueX = pad + 12;
     if (hasTasks) {
@@ -645,20 +877,37 @@ void Window::layout() {
     visible(empty_, !showRows);
     visible(emptyFormats_, !hasTasks);
 
-    settingsBox_ = showSettings ? box(pad, settingsY, content, 70) : RECT{};
+    settingsBox_ = showSource ? box(pad, settingsY, content, settingsHeight) : RECT{};
     const int inner = pad + 12;
     const int right = width - pad - 12;
     const int qualityWidth = compact ? 83 : 95;
-    place(presetLabel_, inner, settingsY + 13, 70, 21);
-    place(preset_, inner + 72, settingsY + 10, right - inner - 72 - qualityWidth - 154, 290);
-    place(fixedPreset_, inner + 72, settingsY + 13, right - inner - 72 - 104, 21);
-    place(qualityLabel_, right - qualityWidth - 140, settingsY + 13, 36, 21);
-    place(quality_, right - qualityWidth - 103, settingsY + 10, qualityWidth, 110);
-    place(advanced_, right - 94, settingsY + 8, 94, 29);
-    place(hint_, inner, settingsY + 45, right - inner, 19);
-    for (HWND item : {presetLabel_, advanced_, hint_}) visible(item, showSettings);
-    for (HWND item : {preset_, qualityLabel_, quality_}) visible(item, showSettings && !fixedFormat);
+    const int presetRight = right - (showAdvanced ? 104 : 0) -
+                            (showQuality ? qualityWidth + 50 : 0);
+    place(source_, inner, settingsY + 12, right - inner - (!showSettings && showExtract ? 104 : 0), 20);
+    place(presetLabel_, inner, settingsY + 43, 70, 21);
+    place(preset_, inner + 72, settingsY + 39, presetRight - inner - 72, 290);
+    place(fixedPreset_, inner + 72, settingsY + 42, right - inner - 72 - 104, 21);
+    place(qualityLabel_, right - qualityWidth - 140, settingsY + 43, 36, 21);
+    place(quality_, right - qualityWidth - 103, settingsY + 39, qualityWidth, 182);
+    place(advanced_, right - 94, settingsY + 37, 94, 29);
+    place(resolutionLabel_, inner, settingsY + 80, 70, 20);
+    place(resolution_, inner + 72, settingsY + 76, 125, 305);
+    place(sampleRateLabel_, inner + 211, settingsY + 80, 72, 20);
+    const int sampleWidth = std::min(110, right - inner - 283 - (showExtract ? 103 : 0));
+    place(sampleRate_, inner + 283, settingsY + 76, sampleWidth, 305);
+    place(extract_, right - 94, settingsY + (showSettings ? 74 : 7), 94, 29);
+    const int hintX = showPrimary ? inner + 210 : inner;
+    place(hint_, hintX, settingsY + 81, right - hintX - (showExtract ? 103 : 0), 19);
+    visible(source_, showSource);
+    visible(presetLabel_, showSettings);
+    visible(advanced_, showAdvanced);
+    visible(hint_, showSettings && hasHint);
+    visible(preset_, showSettings && !fixedFormat);
+    for (HWND item : {qualityLabel_, quality_}) visible(item, showQuality);
     visible(fixedPreset_, showSettings && fixedFormat);
+    for (HWND item : {resolutionLabel_, resolution_}) visible(item, showPrimary);
+    for (HWND item : {sampleRateLabel_, sampleRate_}) visible(item, showSecondary);
+    visible(extract_, showExtract);
 
     footerBox_ = hasTasks ? box(pad, footerY, content, 87) : RECT{};
     place(pathLabel_, inner, footerY + 14, 58, 22);
@@ -695,9 +944,6 @@ void Window::paint() {
     const auto background = contrast_ ? GetSysColor(COLOR_WINDOW) : canvasColor;
     const auto surface = contrast_ ? background : paperColor;
     const auto border = contrast_ ? GetSysColor(COLOR_WINDOWTEXT) : borderColor;
-    const auto text = contrast_ ? GetSysColor(COLOR_WINDOWTEXT) : inkColor;
-    const auto selectedFill = contrast_ ? GetSysColor(COLOR_HIGHLIGHT) : tintColor;
-    const auto selectedText = contrast_ ? GetSysColor(COLOR_HIGHLIGHTTEXT) : accentColor;
     fillBox(dc, client, background);
     roundedBox(dc, brandBox_, contrast_ ? background : tintColor, border, px(14));
     for (const auto& card : {queueBox_, settingsBox_, footerBox_}) {
@@ -722,16 +968,6 @@ void Window::paint() {
         roundedBox(dc, dropBox_, contrast_ ? background : dropColor,
                    contrast_ ? border : RGB(198, 151, 120), px(11), PS_DOT);
         drawIcon(illustrationBox_, welcomeIconResource, 0);
-    }
-    constexpr const wchar_t* steps[]{L"1  添加文件", L"2  选择格式", L"3  开始转换"};
-    for (int index = 0; index < 3; ++index) {
-        const auto& rect = stepBoxes_[index];
-        if (IsRectEmpty(&rect)) continue;
-        const bool current = index == step_;
-        roundedBox(dc, rect, current ? selectedFill : surface,
-                   current && !contrast_ ? RGB(226, 183, 155) : border, px(9));
-        centeredText(dc, rect, steps[index], current ? selectedText : text,
-                     current ? strongFont_ : font_);
     }
     EndPaint(window_, &state);
 }
@@ -834,7 +1070,17 @@ void Window::refreshRow(TaskId id) {
     const int row = found->second;
     const auto& task = tasks_.at(id);
     const auto* preset = findPreset(task.job.preset);
-    ListView_SetItemText(queue_, row, 1, const_cast<wchar_t*>(preset ? preset->label.c_str() : L""));
+    std::wstring output = preset ? preset->label : std::wstring{};
+    if (preset && preset->kind == Kind::Video && !task.job.options.remux) {
+        const int index = resolutionIndex(task.job.options);
+        if (index == static_cast<int>(resolutions.size())) output += L" · 自定义";
+        else if (index > 0) output += std::wstring(L" · ") + resolutions[index].label;
+    } else if (preset && preset->kind == Kind::Image) {
+        const auto& options = task.job.options;
+        if (options.imageLongEdge) output += L" · " + std::to_wstring(options.imageLongEdge);
+        else if (options.width || options.height) output += L" · 自定义";
+    }
+    ListView_SetItemText(queue_, row, 1, const_cast<wchar_t*>(output.c_str()));
     ListView_SetItemText(queue_, row, 2, const_cast<wchar_t*>(task.status.c_str()));
 }
 
@@ -843,24 +1089,34 @@ void Window::syncSelection(bool allPresets) {
     choices_.clear();
     morePresets_ = false;
     SendMessageW(preset_, CB_RESETCONTENT, 0, 0);
-    Kind kind = Kind::Unknown;
-    const Task* task = nullptr;
-    if (!ids.empty()) {
-        task = &tasks_.at(ids.front());
-        if (task->phase == Phase::Ready || task->phase == Phase::Failed ||
-            task->phase == Phase::Cancelled) kind = task->source.kind;
+    const Task* task = ids.empty() ? nullptr : &tasks_.at(ids.front());
+    Kind target = task && editable(*task) ? outputKind(*task) : Kind::Unknown;
+    const auto compatible = [this, target](TaskId id) {
+        const auto& selectedTask = tasks_.at(id);
+        return editable(selectedTask) && outputKind(selectedTask) == target;
+    };
+    if (!std::all_of(ids.begin(), ids.end(), compatible)) target = Kind::Unknown;
+    int audioVideos = 0;
+    int audioOutputs = 0;
+    for (TaskId id : ids) {
+        const auto& selectedTask = tasks_.at(id);
+        if (editable(selectedTask) && selectedTask.source.kind == Kind::Video &&
+            selectedTask.source.hasAudio) {
+            ++audioVideos;
+            if (outputKind(selectedTask) == Kind::Audio) ++audioOutputs;
+        }
     }
+    audioAction_ = !audioVideos ? AudioAction::None :
+        audioOutputs == audioVideos ? AudioAction::RestoreVideo : AudioAction::Extract;
+    showText(extract_, audioAction_ == AudioAction::RestoreVideo ? L"转回视频" : L"提取音频");
+    showText(source_, !task ? L"" : ids.size() == 1 ? describeSource(*task) :
+        L"已选 " + std::to_wstring(ids.size()) + L" 个文件");
     int chosen = 0;
-    if (kind != Kind::Unknown) {
+    if (target != Kind::Unknown) {
         for (const auto& preset : ttk::presets()) {
-            if (!accepts(kind, preset.kind)) continue;
-            const auto matches = [this, &preset](TaskId id) {
-                const auto& selectedTask = tasks_.at(id);
-                return accepts(selectedTask.source.kind, preset.kind) &&
-                       selectedTask.phase != Phase::Done && selectedTask.phase != Phase::Converting;
-            };
-            if (!std::all_of(ids.begin(), ids.end(), matches)) continue;
-            if (!allPresets && preset.id != task->job.preset && !commonPreset(preset)) {
+            if (preset.kind != target) continue;
+            if (!allPresets && target != Kind::Audio && preset.id != task->job.preset &&
+                !commonPreset(preset)) {
                 morePresets_ = true;
                 continue;
             }
@@ -877,33 +1133,80 @@ void Window::syncSelection(bool allPresets) {
     }
     selectChoice(preset_, chosen);
     draftOptions_ = task ? task->job.options : ttk::Options{};
-    selectChoice(quality_, draftOptions_.quality);
+    updateQualityChoices(target);
+    updateInlineMenus();
     refreshButtons();
     layout();
 }
 
-void Window::refreshButtons() {
-    const bool editable = !choices_.empty();
-    const int current = choice(preset_);
-    const auto* currentPreset = current >= 0 && static_cast<std::size_t>(current) < choices_.size()
-        ? choices_[static_cast<std::size_t>(current)] : nullptr;
-    const Kind target = currentPreset ? currentPreset->kind : Kind::Unknown;
-    const bool pdf = target == Kind::Pdf;
-    const auto presetId = currentPreset ? currentPreset->id : std::wstring{};
-    if (pdf) {
-        showText(hint_, L"扫描页会自动识别简体中文和英语。");
-    } else if (presetId.find(L"av1") != std::wstring::npos) {
-        showText(hint_, L"AV1 适合压缩存档，编码可能较慢。");
-    } else if (presetId.find(L"h265") != std::wstring::npos) {
-        showText(hint_, L"H.265 体积较小，旧设备兼容性有限。");
-    } else if (presetId == L"mp4-h264") {
-        showText(hint_, L"H.264 兼容常见播放器和设备。");
-    } else {
-        showText(hint_, selection().size() > 1 ? L"更改会应用到当前选中的同类任务。" : L"");
+void Window::updateQualityChoices(Kind target) {
+    SendMessageW(quality_, CB_RESETCONTENT, 0, 0);
+    int current = 0;
+    for (std::size_t index = 0; index < qualities.size(); ++index) {
+        const auto& quality = qualities[index];
+        addChoice(quality_, target == Kind::Audio ? quality.audio : quality.picture);
+        if (quality.value == draftOptions_.quality) current = static_cast<int>(index);
     }
-    EnableWindow(preset_, editable);
-    EnableWindow(quality_, editable && !pdf);
-    EnableWindow(advanced_, currentPreset != nullptr);
+    selectChoice(quality_, current);
+}
+
+void Window::updateInlineMenus() {
+    const auto* preset = selectedPreset();
+    auto menus = preset ? inlineMenus(*preset, draftOptions_) : std::pair<OptionMenu, OptionMenu>{};
+    primaryOption_ = std::move(menus.first);
+    secondaryOption_ = std::move(menus.second);
+    const auto populate = [this](OptionMenu& menu, HWND caption, HWND combo) {
+        showText(caption, menu.caption);
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        if (!menu.member) return;
+        const int value = sizeMenu(menu) && (draftOptions_.width || draftOptions_.height)
+            ? customSize : draftOptions_.*(menu.member);
+        const auto available = std::any_of(menu.items.begin(), menu.items.end(), [value](const auto& item) {
+            return item.value == value;
+        });
+        if (!available && menu.member == &ttk::Options::audioKbps && value > 0) {
+            menu.items.push_back({value, std::to_wstring(value) + L" kb/s"});
+        }
+        int selected = 0;
+        for (std::size_t index = 0; index < menu.items.size(); ++index) {
+            const auto& item = menu.items[index];
+            addChoice(combo, item.label.c_str());
+            if (item.value == value) selected = static_cast<int>(index);
+        }
+        selectChoice(combo, selected);
+    };
+    populate(primaryOption_, resolutionLabel_, resolution_);
+    populate(secondaryOption_, sampleRateLabel_, sampleRate_);
+}
+
+const ttk::Preset* Window::selectedPreset() const {
+    const int index = choice(preset_);
+    return index >= 0 && static_cast<std::size_t>(index) < choices_.size()
+        ? choices_[static_cast<std::size_t>(index)] : nullptr;
+}
+
+void Window::refreshButtons() {
+    const auto* currentPreset = selectedPreset();
+    const Kind target = currentPreset ? currentPreset->kind : Kind::Unknown;
+    const auto presetId = currentPreset ? currentPreset->id : std::wstring{};
+    if (target == Kind::Pdf) {
+        showText(hint_, L"扫描页会自动识别简体中文和英语。");
+    } else if (target == Kind::Video) {
+        showText(hint_, draftOptions_.remux ? L"无损换封装保留原尺寸。" :
+            draftOptions_.quality == 3 || draftOptions_.quality == 5 ? L"画质和尺寸独立设置。" :
+            presetId.find(L"av1") != std::wstring::npos ? L"AV1 编码可能较慢。":
+            L"调整时保持画面比例。");
+    } else if (target == Kind::Image) {
+        showText(hint_, presetId == L"ico" ? L"图标使用正方形画布。" : L"调整时保持图片比例。");
+    } else {
+        showText(hint_, selection().size() > 1 && currentPreset ?
+                 L"更改将应用到选中的同类任务。" : L"");
+    }
+    EnableWindow(preset_, currentPreset != nullptr);
+    EnableWindow(quality_, currentPreset && permitsQuality(*currentPreset));
+    EnableWindow(resolution_, primaryOption_.member != nullptr);
+    EnableWindow(sampleRate_, secondaryOption_.member != nullptr);
+    EnableWindow(advanced_, currentPreset && permitsAdvanced(*currentPreset));
     const bool batchActive = !scheduled_.empty() || (active_ && !probing_);
     const auto ready = std::count_if(tasks_.begin(), tasks_.end(), [](const auto& entry) {
         return entry.second.phase == Phase::Ready;
@@ -937,8 +1240,6 @@ void Window::refreshStatus() {
     else text = L"没有待转换文件";
     if (done) text += L" · 完成 " + std::to_wstring(done);
     if (failed) text += L" · 失败 " + std::to_wstring(failed);
-    step_ = tasks_.empty() || (probing_ && active_) ? 0 :
-        active_ || !scheduled_.empty() || (!ready && done) ? 2 : 1;
     showText(status_, text);
     refreshButtons();
     layout();
@@ -1030,50 +1331,144 @@ void Window::pickDirectory() {
     dialog->Release();
 }
 
-void Window::applySettings() {
-    const int index = choice(preset_);
-    if (index < 0 || static_cast<std::size_t>(index) >= choices_.size()) return;
-    const auto& preset = *choices_[static_cast<std::size_t>(index)];
-    auto options = draftOptions_;
-    options.quality = std::max(0, choice(quality_));
-    for (const auto& field : numbers) {
-        if (!numericEnabled(field.id, preset.kind)) options.*(field.member) = 0;
-    }
-    options.remux = options.remux && (preset.kind == Kind::Video || preset.kind == Kind::Audio);
-    options.hardware = options.hardware && preset.kind == Kind::Video;
-    options.forceOcr = options.forceOcr && preset.kind == Kind::Pdf;
-    for (const TaskId id : selection()) {
+void Window::applySettings(SettingChange change) {
+    const auto* preset = selectedPreset();
+    if (!preset) return;
+    const int quality = choice(quality_);
+    if (change == SettingChange::Quality && (!permitsQuality(*preset) || quality < 0 ||
+        static_cast<std::size_t>(quality) >= qualities.size())) return;
+    const auto selected = selection();
+    for (const TaskId id : selected) {
         auto& task = tasks_.at(id);
-        if (!accepts(task.source.kind, preset.kind)) continue;
-        if (task.phase != Phase::Ready && task.phase != Phase::Failed &&
-            task.phase != Phase::Cancelled) continue;
-        task.job.preset = preset.id;
-        task.job.options = options;
+        const auto* previous = findPreset(task.job.preset);
+        if (!editable(task) || !previous || previous->kind != preset->kind) continue;
+        auto& options = task.job.options;
+        switch (change) {
+        case SettingChange::Preset:
+            setOutput(task, *preset);
+            if (preset->kind == task.source.kind) {
+                auto& saved = savedPresets_[task.source.kind];
+                if (saved != preset->id) {
+                    saved = preset->id;
+                    writeSetting(settings_, kindName(task.source.kind), saved);
+                }
+            }
+            break;
+        case SettingChange::Quality:
+            if (!permitsQuality(*previous)) continue;
+            options.quality = qualities[static_cast<std::size_t>(quality)].value;
+            break;
+        case SettingChange::Advanced: {
+            if (!permitsAdvanced(*previous)) continue;
+            auto changed = draftOptions_;
+            changed.quality = options.quality;
+            changed.resolution = preset->kind == Kind::Video &&
+                !changed.width && !changed.height && !changed.remux ? options.resolution : 0;
+            changed.imageLongEdge = preset->kind == Kind::Image &&
+                !changed.width && !changed.height ? options.imageLongEdge : 0;
+            changed.audioSampleRate = changed.remux ? 0 : options.audioSampleRate;
+            changed.ocrDpi = options.ocrDpi;
+            if (preset->kind == Kind::Audio) {
+                if (!ttk::hasAdjustableAudioBitrate(previous->id)) changed.audioKbps = 0;
+                else if (!ttk::hasAdjustableAudioBitrate(preset->id) ||
+                         !ttk::supportsAudioBitrate(previous->id, changed.audioSampleRate,
+                                                     changed.audioKbps)) {
+                    changed.audioKbps = options.audioKbps;
+                }
+            }
+            options = changed;
+            break;
+        }
+        }
         refreshRow(id);
-        if (preset.kind == task.source.kind) {
-            auto& saved = savedPresets_[task.source.kind];
-            if (saved != preset.id) {
-                saved = preset.id;
-                writeSetting(settings_, kindName(task.source.kind), saved);
+    }
+    if (!selected.empty()) draftOptions_ = tasks_.at(selected.front()).job.options;
+    if (change != SettingChange::Quality) updateInlineMenus();
+    refreshButtons();
+    layout();
+}
+
+void Window::applyInlineOption(const OptionMenu& menu, HWND combo) {
+    const auto* preset = selectedPreset();
+    const int index = choice(combo);
+    if (!preset || !menu.member || index < 0 || static_cast<std::size_t>(index) >= menu.items.size()) return;
+    const int value = menu.items[static_cast<std::size_t>(index)].value;
+    if (value == customSize) {
+        editAdvanced(true);
+        return;
+    }
+    const bool adjustingRate = menu.member == &ttk::Options::audioSampleRate;
+    const bool adjustingBitrate = menu.member == &ttk::Options::audioKbps;
+    const auto selected = selection();
+    int bitratesReset = 0;
+    for (TaskId id : selected) {
+        auto& task = tasks_.at(id);
+        if (!editable(task) || outputKind(task) != preset->kind) continue;
+        auto& options = task.job.options;
+        const auto* currentPreset = findPreset(task.job.preset);
+        if (!currentPreset) continue;
+        if (adjustingBitrate && (!ttk::hasAdjustableAudioBitrate(currentPreset->id) ||
+            !ttk::supportsAudioBitrate(currentPreset->id, options.audioSampleRate, value))) continue;
+        if (adjustingRate) {
+            const auto supported = ttk::audioSampleRates(currentPreset->id);
+            if (std::find(supported.begin(), supported.end(), value) == supported.end()) continue;
+        }
+        if (menu.member == &ttk::Options::imageLongEdge &&
+            !(currentPreset->id == L"ico" ? contains(iconEdges, value) : contains(imageEdges, value))) continue;
+        options.*(menu.member) = value;
+        if (adjustingRate &&
+            !ttk::supportsAudioBitrate(currentPreset->id, value, options.audioKbps)) {
+            options.audioKbps = 0;
+            ++bitratesReset;
+        }
+        if (sizeMenu(menu)) {
+            options.width = 0;
+            options.height = 0;
+        }
+        if (value && (menu.member == &ttk::Options::resolution || adjustingBitrate || adjustingRate)) {
+            options.remux = false;
+        }
+        refreshRow(id);
+    }
+    if (!selected.empty()) draftOptions_ = tasks_.at(selected.front()).job.options;
+    if (adjustingRate) updateInlineMenus();
+    if (bitratesReset > 0) {
+        showText(status_, std::to_wstring(bitratesReset) + L" 个任务的码率已切换为自动。");
+    }
+    refreshButtons();
+    layout();
+}
+
+void Window::toggleAudioOutput() {
+    if (audioAction_ == AudioAction::None) return;
+    const bool extract = audioAction_ == AudioAction::Extract;
+    const auto* preset = findPreset(extract ? L"mp3" : ttk::defaultPreset(Kind::Video));
+    if (!preset) return;
+    for (TaskId id : selection()) {
+        auto& task = tasks_.at(id);
+        if (editable(task) && task.source.kind == Kind::Video && task.source.hasAudio) {
+            if (outputKind(task) != preset->kind) {
+                setOutput(task, *preset);
+                refreshRow(id);
             }
         }
     }
-    draftOptions_ = options;
-    refreshButtons();
+    syncSelection();
 }
 
-void Window::editAdvanced() {
-    const int index = choice(preset_);
-    if (index < 0 || static_cast<std::size_t>(index) >= choices_.size()) return;
-    const auto* preset = choices_[static_cast<std::size_t>(index)];
+void Window::editAdvanced(bool focusSize) {
+    const auto* preset = selectedPreset();
+    if (!preset || !permitsAdvanced(*preset)) return;
     const auto editing = selection();
-    AdvancedDraft draft{preset->kind, draftOptions_};
+    const bool audioBitrate = preset->kind != Kind::Audio || ttk::hasAdjustableAudioBitrate(preset->id);
+    AdvancedDraft draft{preset->kind, draftOptions_, focusSize, audioBitrate, preset->id};
     if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(UI_ADVANCED_DIALOG), window_, advancedDialog,
                         reinterpret_cast<LPARAM>(&draft)) == IDOK && editing == selection() &&
-        choice(preset_) == index && static_cast<std::size_t>(index) < choices_.size() &&
-        choices_[static_cast<std::size_t>(index)] == preset) {
+        selectedPreset() == preset) {
         draftOptions_ = draft.options;
-        applySettings();
+        applySettings(SettingChange::Advanced);
+    } else if (focusSize) {
+        updateInlineMenus();
     }
 }
 
@@ -1081,6 +1476,12 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
     if (message == WM_INITDIALOG) {
         auto& draft = *reinterpret_cast<AdvancedDraft*>(lp);
         SetWindowLongPtrW(dialog, DWLP_USER, lp);
+        SetWindowTextW(dialog, L"高级设置");
+        SetDlgItemTextW(dialog, IDOK, L"应用");
+        SetDlgItemTextW(dialog, IDCANCEL, L"取消");
+        SetDlgItemTextW(dialog, UI_ADVANCED_REMUX, L"无损换封装");
+        SetDlgItemTextW(dialog, UI_ADVANCED_HARDWARE, L"尝试硬件编码");
+        SetDlgItemTextW(dialog, UI_ADVANCED_OCR, L"每页都运行 OCR（简体中文、英语）");
         const bool video = draft.kind == Kind::Video;
         const bool audio = draft.kind == Kind::Audio;
         const bool pdf = draft.kind == Kind::Pdf;
@@ -1103,7 +1504,8 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
         };
         for (const auto& field : numbers) {
             const auto control = GetDlgItem(dialog, field.id);
-            const bool enabled = numericEnabled(field.id, draft.kind);
+            const bool enabled = numericEnabled(field, draft);
+            SetDlgItemTextW(dialog, field.labelId, field.display);
             ShowWindow(control, enabled ? SW_SHOWNA : SW_HIDE);
             ShowWindow(GetDlgItem(dialog, field.labelId), enabled ? SW_SHOWNA : SW_HIDE);
             showText(control, std::to_wstring(draft.options.*(field.member)));
@@ -1112,8 +1514,11 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
         setControl(UI_ADVANCED_REMUX, video || audio, draft.options.remux);
         setControl(UI_ADVANCED_HARDWARE, hw, draft.options.hardware);
         setControl(UI_ADVANCED_OCR, pdf, draft.options.forceOcr);
+        SetDlgItemTextW(dialog, UI_ADVANCED_HINT, L"数值填 0 使用默认设置。");
         int dialogHeight = 144;
         if (video) {
+            SetDlgItemTextW(dialog, UI_ADVANCED_HINT,
+                            L"数值填 0 使用默认设置。自定义宽度或高度会替换分辨率预设。");
             place(IDOK, 151, 116, 55, 16);
             place(IDCANCEL, 213, 116, 55, 16);
         } else if (pdf) {
@@ -1124,16 +1529,24 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
             place(IDCANCEL, 213, 77, 55, 16);
             dialogHeight = 105;
         } else if (audio) {
-            place(UI_ADVANCED_AUDIO_RATE_LABEL, 14, 39, 60, 11);
-            place(UI_ADVANCED_AUDIO_RATE, 75, 35, 45, 15);
-            place(UI_ADVANCED_CHANNELS_LABEL, 147, 39, 60, 11);
-            place(UI_ADVANCED_CHANNELS, 213, 35, 55, 15);
-            place(UI_ADVANCED_THREADS_LABEL, 14, 59, 60, 11);
-            place(UI_ADVANCED_THREADS, 75, 55, 45, 15);
-            place(UI_ADVANCED_REMUX, 14, 78, 110, 13);
-            place(IDOK, 151, 99, 55, 16);
-            place(IDCANCEL, 213, 99, 55, 16);
-            dialogHeight = 127;
+            if (draft.audioBitrate) {
+                place(UI_ADVANCED_AUDIO_RATE_LABEL, 14, 39, 60, 11);
+                place(UI_ADVANCED_AUDIO_RATE, 75, 35, 45, 15);
+                place(UI_ADVANCED_CHANNELS_LABEL, 147, 39, 60, 11);
+                place(UI_ADVANCED_CHANNELS, 213, 35, 55, 15);
+                place(UI_ADVANCED_THREADS_LABEL, 14, 59, 60, 11);
+                place(UI_ADVANCED_THREADS, 75, 55, 45, 15);
+            } else {
+                place(UI_ADVANCED_CHANNELS_LABEL, 14, 39, 60, 11);
+                place(UI_ADVANCED_CHANNELS, 75, 35, 45, 15);
+                place(UI_ADVANCED_THREADS_LABEL, 147, 39, 62, 11);
+                place(UI_ADVANCED_THREADS, 213, 35, 55, 15);
+            }
+            const int optionsY = draft.audioBitrate ? 78 : 58;
+            place(UI_ADVANCED_REMUX, 14, optionsY, 110, 13);
+            place(IDOK, 151, optionsY + 21, 55, 16);
+            place(IDCANCEL, 213, optionsY + 21, 55, 16);
+            dialogHeight = optionsY + 49;
         } else {
             place(IDOK, 151, 67, 55, 16);
             place(IDCANCEL, 213, 67, 55, 16);
@@ -1146,6 +1559,10 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
                            FALSE, static_cast<DWORD>(GetWindowLongPtrW(dialog, GWL_EXSTYLE)));
         SetWindowPos(dialog, nullptr, area.left, area.top, client.right - client.left,
                      client.bottom - client.top, SWP_NOACTIVATE | SWP_NOZORDER);
+        if (draft.focusSize && numericEnabled(UI_ADVANCED_WIDTH, draft.kind)) {
+            SetFocus(GetDlgItem(dialog, UI_ADVANCED_WIDTH));
+            return FALSE;
+        }
         return TRUE;
     }
     if (message != WM_COMMAND) return FALSE;
@@ -1158,7 +1575,7 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
     auto options = draft.options;
     for (const auto& field : numbers) {
         const auto control = GetDlgItem(dialog, field.id);
-        const bool enabled = numericEnabled(field.id, draft.kind);
+        const bool enabled = numericEnabled(field, draft);
         const auto value = enabled ? windowText(control) : std::wstring{};
         wchar_t* end = nullptr;
         const long parsed = value.empty() ? 0 : std::wcstol(value.c_str(), &end, 10);
@@ -1178,6 +1595,13 @@ INT_PTR CALLBACK Window::advancedDialog(HWND dialog, UINT message, WPARAM wp, LP
     options.remux = checked(UI_ADVANCED_REMUX);
     options.hardware = checked(UI_ADVANCED_HARDWARE);
     options.forceOcr = checked(UI_ADVANCED_OCR);
+    if (draft.kind == Kind::Audio && options.audioKbps &&
+        !ttk::supportsAudioBitrate(draft.presetId, options.audioSampleRate, options.audioKbps)) {
+        MessageBoxW(dialog, L"当前采样率无法使用所填的码率。请输入有效码率，或填 0 使用自动设置。",
+                    L"检查高级设置", MB_OK | MB_ICONWARNING);
+        SetFocus(GetDlgItem(dialog, UI_ADVANCED_AUDIO_RATE));
+        return TRUE;
+    }
     if (options.remux && (options.width || options.height || options.videoKbps ||
                          options.audioKbps || options.channels)) {
         MessageBoxW(dialog, L"无损换封装会保留原尺寸、码率和声道。请将这些参数填为 0，或取消勾选。",
@@ -1491,11 +1915,14 @@ void Window::command(int id, int code) {
                 syncSelection(true);
                 PostMessageW(preset_, CB_SHOWDROPDOWN, TRUE, 0);
             } else {
-                applySettings();
+                applySettings(SettingChange::Preset);
             }
         }
         break;
-    case Quality: if (code == CBN_SELCHANGE) applySettings(); break;
+    case Quality: if (code == CBN_SELCHANGE) applySettings(SettingChange::Quality); break;
+    case Resolution: if (code == CBN_SELCHANGE) applyInlineOption(primaryOption_, resolution_); break;
+    case SampleRate: if (code == CBN_SELCHANGE) applyInlineOption(secondaryOption_, sampleRate_); break;
+    case ExtractAudio: toggleAudioOutput(); break;
     case Advanced: editAdvanced(); break;
     case Browse: pickDirectory(); break;
     case Start: requestStart(false); break;

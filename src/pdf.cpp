@@ -477,7 +477,7 @@ int countPages(std::string_view info) {
     throw PdfError{L"无法读取 PDF 页数。", {}};
 }
 
-int rasterDpi(std::string_view info) {
+int rasterDpi(std::string_view info, int requestedDpi) {
     for (const auto line : split(info, '\n')) {
         const auto sizePosition = line.find("size:");
         if (line.substr(0, 4) != "Page" || sizePosition == std::string_view::npos) continue;
@@ -488,7 +488,8 @@ int rasterDpi(std::string_view info) {
         char separator = 0;
         if (!(values >> width >> separator >> height) || separator != 'x' ||
             !std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0) continue;
-        const double bounded = (std::min)({300.0, 72 * std::sqrt(maxRasterPixels / (width * height)),
+        const double bounded = (std::min)({static_cast<double>(requestedDpi),
+                                           72 * std::sqrt(maxRasterPixels / (width * height)),
                                            72 * 12000 / width, 72 * 12000 / height});
         if (bounded >= 30.0) return static_cast<int>(bounded);
         throw PdfError{L"扫描页尺寸超出 OCR 处理范围。", {}};
@@ -513,13 +514,13 @@ std::wstring pageImage(int page) {
     return L"page-" + number + L".png";
 }
 
-bool appendRecognizedPage(std::string& xml, int page, const fs::path& tesseract,
+bool appendRecognizedPage(std::string& xml, int page, int requestedDpi, const fs::path& tesseract,
                           const fs::path& scratch, const Cancel& cancel) {
     const auto pageNumber = std::to_wstring(page);
     const auto info = runEngine(enginePath(L"pdfinfo.exe"),
         {L"-cfg", L"xpdfrc", L"-f", pageNumber, L"-l", pageNumber, L"input.pdf"},
         scratch, cancel, L"无法读取 PDF 页面。");
-    const auto dpi = std::to_wstring(rasterDpi(info));
+    const auto dpi = std::to_wstring(rasterDpi(info, requestedDpi));
     runEngine(enginePath(L"pdftopng.exe"),
         {L"-cfg", L"xpdfrc", L"-f", pageNumber, L"-l", pageNumber, L"-r", dpi, L"-gray", L"input.pdf", L"page"},
         scratch, cancel, L"无法渲染扫描页。");
@@ -590,11 +591,15 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
                 }
                 ++textPagesCount;
             } else {
+                const int dpi = job.options.ocrDpi;
                 if (tesseract.empty()) {
+                    if (dpi != 200 && dpi != 300 && dpi != 400) {
+                        throw PdfError{L"OCR 分辨率请选择 200、300 或 400 DPI。", {}};
+                    }
                     tesseract = enginePath(L"tesseract.exe");
                     stageOcr(tesseract, scratch, cancel);
                 }
-                if (appendRecognizedPage(xml, page, tesseract, scratch, cancel)) ++ocrPagesCount;
+                if (appendRecognizedPage(xml, page, dpi, tesseract, scratch, cancel)) ++ocrPagesCount;
                 else {
                     appendParagraph(xml, {});
                     ++unrecognizedPages;

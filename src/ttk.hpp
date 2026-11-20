@@ -25,10 +25,16 @@ struct SourceInfo {
     Kind kind = Kind::Unknown;
     bool animated = false;
     std::wstring detail;
+    std::wstring container;
+    std::wstring videoCodec;
+    std::wstring audioCodec;
+    int width = 0;
+    int height = 0;
+    bool hasAudio = false;
 };
 
 struct Options {
-    int quality = 1; // 0 = fast, 1 = balanced, 2 = smaller.
+    int quality = 1; // 0 = fast, 1 = balanced, 2 = smaller, 3 = low, 4 = high, 5 = very low.
     int width = 0;
     int height = 0;
     int videoKbps = 0;
@@ -38,6 +44,10 @@ struct Options {
     bool remux = false;
     bool hardware = false;
     bool forceOcr = false;
+    int resolution = 0; // Nominal short edge in pixels. Zero keeps the input size.
+    int imageLongEdge = 0; // Zero keeps the input size, with a maximum of 256 for ICO.
+    int audioSampleRate = 0; // Hertz. Zero lets the encoder select the rate.
+    int ocrDpi = 300;
 };
 
 struct Job {
@@ -72,6 +82,10 @@ std::wstring fromUtf8(const std::string& value);
 std::string toUtf8(const std::wstring& value);
 
 const std::vector<Preset>& mediaPresets();
+bool hasAdjustableAudioBitrate(const std::wstring& preset);
+std::vector<int> audioSampleRates(const std::wstring& preset);
+bool supportsAudioBitrate(const std::wstring& preset, int sampleRate, int bitrate);
+std::vector<int> audioBitrates(const std::wstring& preset, int sampleRate);
 SourceInfo probeMedia(const fs::path& input, const Cancel& cancel);
 Result convertMedia(const Job& job, const fs::path& temporaryOutput,
                     const fs::path& scratch, const Cancel& cancel, const Progress& progress);

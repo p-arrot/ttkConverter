@@ -115,6 +115,93 @@ def read_docx(path):
         return "\n".join(node.text for node in body.iter(W + "t") if node.text), body
 
 
+def check_video_settings(app, probe, source, directory):
+    details = dict(line.split("\t", 1) for line in run(app, "--probe", source, "--details").splitlines()[1:])
+    assert details == {
+        "container": "MP4", "video_codec": "H.264", "audio_codec": "AAC",
+        "width": "320", "height": "240", "has_audio": "1",
+    }, details
+    print("PASS source container, codecs and dimensions", flush=True)
+
+    out = directory / "分辨率测试"
+    original = convert(app, "mp4-h264", source, out, "--fast")
+    resized = convert(app, "mp4-h264", source, out, "--fast", "--resolution", "1080")
+    reduced = convert(app, "mp4-h264", source, out, "--fast", "--resolution", "144")
+    for path, expected in ((original, (320, 240)), (resized, (1440, 1080)), (reduced, (192, 144))):
+        stream = next(s for s in streams(probe, path) if s["codec_type"] == "video")
+        assert (stream["width"], stream["height"]) == expected, stream
+
+    ffmpeg = probe.with_name("ffmpeg.exe")
+    for name, filter_graph, resolution, expected in (
+        ("16比9 单帧", "crop=320:180", "2160", (3840, 2160)),
+        ("竖屏 单帧", "crop=320:180,transpose=clock", "720", (720, 1280)),
+    ):
+        fixture = directory / (name + ".mp4")
+        run(ffmpeg, "-v", "error", "-i", source, "-map", "0:v:0", "-an", "-vf", filter_graph,
+            "-frames:v", "1", "-c:v", "libx264", "-preset", "ultrafast", fixture)
+        result = convert(app, "mp4-h264", fixture, out, "--fast", "--resolution", resolution)
+        stream = streams(probe, result)[0]
+        assert (stream["width"], stream["height"]) == expected, stream
+        if resolution == "2160":
+            for nominal, size in (("240", (426, 240)), ("540", (960, 540))):
+                smaller = convert(app, "mp4-h264", fixture, out, "--fast", "--resolution", nominal)
+                stream = streams(probe, smaller)[0]
+                assert (stream["width"], stream["height"]) == size, stream
+            silent_output = directory / "无音轨输出"
+            result = subprocess.run([str(app), "--convert", "mp3", str(fixture), str(silent_output)],
+                                    capture_output=True, timeout=120)
+            assert result.returncode == 1 and not list(silent_output.iterdir()), result.stderr
+    print("PASS original, 144p, 240p, 540p, 1080p, 4K and portrait resolution; silent video handled", flush=True)
+
+    high = convert(app, "mp4-h264", source, out, "--quality", "high")
+    low = convert(app, "mp4-h264", source, out, "--quality", "low")
+    very_low = convert(app, "mp4-h264", source, out, "--quality", "very-low")
+    assert high.stat().st_size > low.stat().st_size > very_low.stat().st_size
+    for path in (high, low, very_low):
+        stream = next(s for s in streams(probe, path) if s["codec_type"] == "video")
+        assert (stream["width"], stream["height"]) == (320, 240), stream
+    print("PASS high, low and very-low quality change size independently of resolution", flush=True)
+
+
+def check_other_output_settings(app, probe, fixtures, directory):
+    output = directory / "输出选项"
+    image = fixtures / "透明 图片.png"
+    video = fixtures / "测试 视频.mp4"
+    for preset, edge, expected in (("png", 640, (640, 480)), ("ico", 64, (64, 64))):
+        selected = convert(app, preset, image, output, "--image-size", str(edge))
+        stream = streams(probe, selected)[0]
+        assert (stream["width"], stream["height"]) == expected, stream
+        assert stream["pix_fmt"] == "rgba", stream
+
+    mp3 = convert(app, "mp3", video, output, "--audio-bitrate", "64", "--sample-rate", "22050")
+    encoded = streams(probe, mp3)
+    assert len(encoded) == 1 and encoded[0]["codec_name"] == "mp3", encoded
+    assert int(encoded[0]["sample_rate"]) == 22050 and int(encoded[0]["bit_rate"]) == 64000, encoded
+    mp3 = convert(app, "mp3", video, output, "--audio-bitrate", "320", "--sample-rate", "44100")
+    encoded = streams(probe, mp3)[0]
+    assert int(encoded["sample_rate"]) == 44100 and int(encoded["bit_rate"]) == 320000, encoded
+    incompatible_output = directory / "不兼容码率"
+    rejected = subprocess.run(
+        [str(app), "--convert", "mp3", str(video), str(incompatible_output),
+         "--audio-bitrate", "320", "--sample-rate", "22050"],
+        capture_output=True, timeout=120,
+    )
+    assert rejected.returncode == 1 and not (
+        incompatible_output.exists() and any(incompatible_output.iterdir())
+    ), rejected.stderr
+    high = convert(app, "mp3", video, output, "--quality", "high", "--sample-rate", "44100")
+    very_low = convert(app, "mp3", video, output, "--quality", "very-low", "--sample-rate", "44100")
+    assert int(streams(probe, high)[0]["bit_rate"]) > int(streams(probe, very_low)[0]["bit_rate"])
+    wav = convert(app, "wav", video, output, "--sample-rate", "44100")
+    assert int(streams(probe, wav)[0]["sample_rate"]) == 44100
+
+    for dpi in (200, 400):
+        word = convert(app, "pdf-docx", fixtures / "中英扫描.pdf", output, "--ocr-dpi", str(dpi))
+        text, _ = read_docx(word)
+        assert "ORANGECAT" in "".join(text.split()), text
+    print("PASS image long edge, square ICO, compatible audio bitrate/sample rate and OCR DPI presets", flush=True)
+
+
 def smoke(app, directory, fixtures, exhaustive):
     probe = app.parent / "engines" / "ffprobe.exe"
     output = directory / "转换 结果"
@@ -123,6 +210,8 @@ def smoke(app, directory, fixtures, exhaustive):
     animated = fixtures / "动画 图片.gif"
     if not run(app, "--probe", video).startswith("mp4-h264") or not run(app, "--probe", animated).startswith("apng"):
         raise AssertionError("Media type discovery selected wrong defaults")
+    check_video_settings(app, probe, video, directory)
+    check_other_output_settings(app, probe, fixtures, directory)
     checks = list(VIDEO) if exhaustive else ["mp4-h264", "mp4-h265", "mp4-av1", "webm-vp9"]
     for preset in checks:
         converted = convert(app, preset, video, output, "--fast")
@@ -143,7 +232,9 @@ def smoke(app, directory, fixtures, exhaustive):
 
     for preset in list(AUDIO) if exhaustive else ["mp3", "flac", "opus"]:
         converted = convert(app, preset, video, output)
-        assert streams(probe, converted)[0]["codec_name"] == AUDIO[preset], preset
+        audio_streams = streams(probe, converted)
+        assert audio_streams[0]["codec_name"] == AUDIO[preset], preset
+        assert all(stream["codec_type"] == "audio" for stream in audio_streams), audio_streams
         print(f"PASS {preset}", flush=True)
 
     for preset in list(IMAGE) if exhaustive else ["jpg", "png", "ico", "apng", "avif"]:

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ttkConverter VERSION 1.1.1 LANGUAGES CXX RC)
+project(ttkConverter VERSION 1.2.0 LANGUAGES CXX RC)
 
 option(TTK_MODERN "Enable modern Windows hardware encoding controls" OFF)
 add_executable(ttkConverter WIN32
