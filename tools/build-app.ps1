@@ -7,7 +7,8 @@ param(
     [string] $Ninja = 'ninja.exe',
     [switch] $Package,
     [string] $MediaPayload,
-    [string] $PdfPayload
+    [string] $PdfPayload,
+    [string] $PdfLayoutPayload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +45,12 @@ if (!$MediaPayload) {
     $MediaPayload = if ($modern -eq 'ON') { Join-Path $Work 'media-modern/engines' } else { Join-Path $Work "media-$architecture/engines" }
 }
 if (!$PdfPayload) { $PdfPayload = Join-Path $Work "pdf-public/$architecture/engines" }
+if (!$PdfLayoutPayload) {
+    $layoutCandidate = Join-Path $Work "pdf-opendoc/$architecture/engines"
+    if (Test-Path -LiteralPath (Join-Path $layoutCandidate 'convert.mjs') -PathType Leaf) {
+        $PdfLayoutPayload = $layoutCandidate
+    }
+}
 foreach ($name in @('ffmpeg.exe', 'ffprobe.exe')) {
     if (!(Test-Path -LiteralPath (Join-Path $MediaPayload $name))) { throw "Missing $name in $MediaPayload" }
 }
@@ -68,6 +75,14 @@ Get-ChildItem -LiteralPath $MediaPayload -File | Where-Object {
 Get-ChildItem -LiteralPath $PdfPayload | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $pdfEngines -Force -Recurse
 }
+if ($PdfLayoutPayload) {
+    foreach ($name in @('js.exe', 'convert.mjs')) {
+        if (!(Test-Path -LiteralPath (Join-Path $PdfLayoutPayload $name) -PathType Leaf)) {
+            throw "Missing $name in $PdfLayoutPayload"
+        }
+    }
+    Copy-Item -LiteralPath $PdfLayoutPayload -Destination (Join-Path $pdfEngines 'opendoc') -Recurse
+}
 $licenses = Join-Path $stage 'licenses'
 New-Item -ItemType Directory -Path $licenses -Force | Out-Null
 foreach ($name in @('ffmpeg', 'x264', 'x265', 'aom', 'vpx', 'lame', 'opus', 'vorbis', 'ogg', 'webp', 'zlib')) {
@@ -90,8 +105,10 @@ if ($LASTEXITCODE) { throw 'The staged FFmpeg executable did not start' }
 if (Test-Path -LiteralPath (Join-Path $Work 'downloads/dependencies.json')) {
     Copy-Item -LiteralPath (Join-Path $Work 'downloads/dependencies.json') -Destination $licenses -Force
 }
+$auditOptions = @{}
+if ($PdfLayoutPayload) { $auditOptions.AppLocalRuntimeDirectory = Join-Path $pdfEngines 'opendoc' }
 & (Join-Path $PSScriptRoot 'audit-pe.ps1') -Root $stage -Architecture $architecture `
-    -ReadObj (Join-Path $toolchain 'llvm-readobj.exe') -Legacy:($modern -eq 'OFF')
+    -ReadObj (Join-Path $toolchain 'llvm-readobj.exe') -Legacy:($modern -eq 'OFF') @auditOptions
 
 $release = Join-Path $project 'release'
 New-Item -ItemType Directory -Path $release -Force | Out-Null

@@ -19,6 +19,13 @@ PNG 1.6.59: https://github.com/pnggroup/libpng/tree/v1.6.59
 FreeType 2.14.3: https://download.savannah.gnu.org/releases/freetype/
 English and Chinese fast OCR models: https://github.com/tesseract-ocr/tessdata_fast/tree/4.1.0
 
+OpenDoc layout engine (Apache-2.0):
+https://github.com/CasualOffice/opendoc/tree/5ac261ceadbb0fa0bcbe729ce3c2e20721756949
+Mozilla SpiderMonkey from Firefox 115.45.0 ESR (MPL-2.0 and third-party notices):
+https://archive.mozilla.org/pub/firefox/releases/115.45.0esr/source/firefox-115.45.0esr.source.tar.xz
+The optional layout engine runs in a separate local process. Pinned runtime and asset hashes,
+copyright notices, font licenses and source locations are in engines/pdf/opendoc/licenses.
+
 Inno Setup installation creator: https://jrsoftware.org/isinfo.php
 
 Published downloads and corresponding source archives:

@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
-project(ttkConverter VERSION 1.2.1 LANGUAGES CXX RC)
+project(ttkConverter VERSION 1.3.0 LANGUAGES CXX RC)
 
 option(TTK_MODERN "Enable modern Windows hardware encoding controls" OFF)
 add_executable(ttkConverter WIN32
-    src/main.cpp src/core.cpp src/media.cpp src/pdf.cpp src/pdf_layout.cpp src/app.rc
+    src/main.cpp src/core.cpp src/media.cpp src/pdf.cpp src/pdf_layout.cpp src/pdf_ocr_layout.cpp src/app.rc
 )
 target_compile_features(ttkConverter PRIVATE cxx_std_17)
 target_compile_definitions(ttkConverter PRIVATE

@@ -58,7 +58,7 @@ struct Options {
     int resolution = 0; // Nominal short edge in pixels. Zero keeps the input size.
     int imageLongEdge = 0; // Zero keeps the input size, with a maximum of 256 for ICO.
     int audioSampleRate = 0; // Hertz. Zero lets the encoder select the rate.
-    int pdfMode = PreserveLayout;
+    int pdfMode = EditableText;
     int pdfPageDpi = 200;
     int ocrDpi = 300;
 };
@@ -103,6 +103,7 @@ SourceInfo probeMedia(const fs::path& input, const Cancel& cancel);
 VideoGeometry predictVideoGeometry(const SourceInfo& source, const Options& options);
 Result convertMedia(const Job& job, const fs::path& temporaryOutput,
                     const fs::path& scratch, const Cancel& cancel, const Progress& progress);
+bool hasStructuredPdfEngine();
 Result convertPdf(const Job& job, const fs::path& temporaryOutput,
                   const fs::path& scratch, const Cancel& cancel, const Progress& progress);
 

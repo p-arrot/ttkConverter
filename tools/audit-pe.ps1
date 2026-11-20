@@ -3,11 +3,20 @@ param(
     [Parameter(Mandatory)] [string] $Root,
     [Parameter(Mandatory)] [ValidateSet('x86','x64')] [string] $Architecture,
     [string] $ReadObj = 'llvm-readobj.exe',
-    [switch] $Legacy
+    [switch] $Legacy,
+    [string] $AppLocalRuntimeDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath($Root)
+if ($AppLocalRuntimeDirectory) {
+    $AppLocalRuntimeDirectory = [IO.Path]::GetFullPath($AppLocalRuntimeDirectory)
+    $prefix = $Root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (!$AppLocalRuntimeDirectory.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+        !(Test-Path -LiteralPath $AppLocalRuntimeDirectory -PathType Container)) {
+        throw 'The app-local runtime directory must be inside the inspected package'
+    }
+}
 $machine = if ($Architecture -eq 'x86') { 'I386' } else { 'AMD64' }
 $afterWin7 = @(
     'CreateFile2', 'GetCurrentThreadStackLimits', 'GetDpiForWindow', 'GetOverlappedResultEx',
@@ -23,17 +32,30 @@ foreach ($entry in $entries) {
     if ($data -notmatch "Machine: IMAGE_FILE_MACHINE_$machine\b") {
         throw "Unexpected PE architecture: $($entry.FullName)"
     }
-    if ($Legacy -and ($data -match "Symbol: ($afterWin7)(\s|$)" -or
-                    $data -match 'Name: (api-ms-win-|ext-ms-win-|ucrtbase\.dll)')) {
+    $appLocal = $AppLocalRuntimeDirectory -and $entry.DirectoryName -eq $AppLocalRuntimeDirectory
+    $names = @($inspection | Select-String '^\s*Name: (\S+\.dll)\s*$' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+    if ($Legacy -and $data -match "Symbol: ($afterWin7)(\s|$)") {
         throw "Potential post-Win7 static import: $($entry.FullName)"
     }
+    if ($Legacy) {
+        foreach ($name in $names) {
+            if ($name -notmatch '^(api-ms-win-|ext-ms-win-|ucrtbase\.dll$)') { continue }
+            if ($appLocal -and (Test-Path -LiteralPath (Join-Path $AppLocalRuntimeDirectory $name) -PathType Leaf)) { continue }
+            # The vendor's app-local UCRT also references the system's original API set contracts.
+            if ($appLocal -and $entry.Name -eq 'ucrtbase.dll' -and $name -match '^api-ms-win-core-[a-z]+-l1-1-0\.dll$') { continue }
+            throw "Potential post-Win7 static import $name in $($entry.FullName)"
+        }
+    }
     if ($Legacy -and $data -match 'MajorSubsystemVersion: (\d+)\s+MinorSubsystemVersion: (\d+)') {
-        if ([int] $Matches[1] -gt 6 -or ([int] $Matches[1] -eq 6 -and [int] $Matches[2] -gt 1)) {
+        $major = [int] $Matches[1]
+        $minor = [int] $Matches[2]
+        # Allow the exact vendor API forwarders, not a newer executable subsystem.
+        $forwarder = $appLocal -and $entry.Name -match '^api-ms-win-(crt|core)-.*\.dll$' -and !$names
+        if (!$forwarder -and ($major -gt 6 -or ($major -eq 6 -and $minor -gt 1))) {
             throw "Subsystem later than Win7: $($entry.FullName)"
         }
     }
     $relative = $entry.FullName.Substring($Root.Length).TrimStart('\', '/')
-    $names = $inspection | Select-String '^\s*Name: (\S+\.dll)\s*$' | ForEach-Object { $_.Matches[0].Groups[1].Value }
     $report.Add(($relative + ' ' + ($names -join ', ')))
 }
 $report | Set-Content -LiteralPath (Join-Path $Root 'pe-imports.txt') -Encoding UTF8

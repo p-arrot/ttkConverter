@@ -1265,7 +1265,9 @@ void Window::refreshButtons() {
     if (target == Kind::Pdf) {
         if (mixedPdfModes_) showText(hint_, L"请选择要应用的 Word 方式。");
         else if (draftOptions_.pdfMode == ttk::EditableText) {
-            showText(hint_, L"文字可编辑，版式可能变化。");
+            static const bool hasLayoutEngine = ttk::hasStructuredPdfEngine();
+            showText(hint_, hasLayoutEngine && !draftOptions_.forceOcr
+                ? L"文字可编辑，优先保留原稿布局。" : L"文字可编辑，版式可能变化。");
         } else {
             showText(hint_, L"文字嵌在整页图片里，只能编辑整张图片。");
         }

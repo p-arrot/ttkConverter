@@ -1,0 +1,91 @@
+{
+  "opendoc": {
+    "source": "https://github.com/CasualOffice/opendoc",
+    "commit": "5ac261ceadbb0fa0bcbe729ce3c2e20721756949",
+    "licenses": "Apache-2.0 and bundled third-party notices",
+    "files": [
+      {
+        "name": "casual_doc_wasm.mjs",
+        "url": "https://opendoc.casualoffice.org/pkg/casual_doc_wasm.js?v=5ac261ceadbb",
+        "sha256": "b278eaa8a71f51544605cf7d0060797913c6e70427807f7c0d25482230a9a30e"
+      },
+      {
+        "name": "casual_doc_wasm_bg.wasm",
+        "url": "https://opendoc.casualoffice.org/pkg/casual_doc_wasm_bg.wasm?v=5ac261ceadbb",
+        "sha256": "7b2904eceefd74188096d9f2ec56c17952a658c95efba52d80048fac706023ee"
+      },
+      {
+        "name": "casual_doc_wasm_pdf.mjs",
+        "url": "https://opendoc.casualoffice.org/pkg-pdf/casual_doc_wasm_pdf.js?v=5ac261ceadbb",
+        "sha256": "05238af4d36f07c7bef5fb8644409323dc023009fc4366fecbe7bf3f00079955"
+      },
+      {
+        "name": "casual_doc_wasm_pdf_bg.wasm",
+        "url": "https://opendoc.casualoffice.org/pkg-pdf/casual_doc_wasm_pdf_bg.wasm?v=5ac261ceadbb",
+        "sha256": "568f3864089bed944544e42b380824cf0a8bd8cf5a430ba39f7070d098538306"
+      }
+    ],
+    "notices": [
+      {
+        "name": "OpenDoc-LICENSE.txt",
+        "url": "https://raw.githubusercontent.com/CasualOffice/opendoc/5ac261ceadbb0fa0bcbe729ce3c2e20721756949/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      {
+        "name": "OpenDoc-NOTICE.txt",
+        "url": "https://raw.githubusercontent.com/CasualOffice/opendoc/5ac261ceadbb0fa0bcbe729ce3c2e20721756949/NOTICE",
+        "sha256": "da4db99ccf6b6cc0f87d9f57f3f9488b36d488a695d49f75e6e010a367a91d9d"
+      },
+      {
+        "name": "OFL-1.1-Carlito.txt",
+        "url": "https://raw.githubusercontent.com/CasualOffice/opendoc/5ac261ceadbb0fa0bcbe729ce3c2e20721756949/crates/casual-doc-layout/fonts/LICENSES/OFL-1.1-Carlito.txt",
+        "sha256": "58402f82a7c332a700294988fe7554fbb0a63a8d27ccc1ee3bbc640311990a00"
+      },
+      {
+        "name": "OFL-1.1-Liberation.txt",
+        "url": "https://raw.githubusercontent.com/CasualOffice/opendoc/5ac261ceadbb0fa0bcbe729ce3c2e20721756949/crates/casual-doc-layout/fonts/LICENSES/OFL-1.1-Liberation.txt",
+        "sha256": "93fed46019c38bbe566b479d22148e2e8a1e85ada614accb0211c37b2c61c19b"
+      },
+      {
+        "name": "OFL-1.1-NotoEmoji.txt",
+        "url": "https://raw.githubusercontent.com/CasualOffice/opendoc/5ac261ceadbb0fa0bcbe729ce3c2e20721756949/crates/casual-doc-layout/fonts/LICENSES/OFL-1.1-NotoEmoji.txt",
+        "sha256": "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b"
+      },
+      {
+        "name": "OFL-1.1-NotoSansSymbols2.txt",
+        "url": "https://raw.githubusercontent.com/CasualOffice/opendoc/5ac261ceadbb0fa0bcbe729ce3c2e20721756949/crates/casual-doc-layout/fonts/LICENSES/OFL-1.1-NotoSansSymbols2.txt",
+        "sha256": "b118dd41337806a5d4797052c77caf3bd096aed783e5eb21b4d11154351e1ac0"
+      }
+    ]
+  },
+  "spidermonkey": {
+    "version": "115.45.0esr",
+    "source": "https://archive.mozilla.org/pub/firefox/releases/115.45.0esr/source/firefox-115.45.0esr.source.tar.xz",
+    "sourceSha256": "f3f9c1b7dad235220f7a0283c363c0cf4224da3479a25c6648174e52cca7407d",
+    "checksums": "https://archive.mozilla.org/pub/firefox/releases/115.45.0esr/SHA256SUMS",
+    "archives": {
+      "x86": {
+        "name": "jsshell-win32.zip",
+        "url": "https://archive.mozilla.org/pub/firefox/releases/115.45.0esr/jsshell/jsshell-win32.zip",
+        "sha256": "ceea9102777cfd5bc6059971ae52c9a0e4bda6fa51379c8baa6582e1fbb35793"
+      },
+      "x64": {
+        "name": "jsshell-win64.zip",
+        "url": "https://archive.mozilla.org/pub/firefox/releases/115.45.0esr/jsshell/jsshell-win64.zip",
+        "sha256": "7f4ff050f39e8b8a3ac5c3825343491a11be05f515a1ca9f597883bc9882093b"
+      }
+    },
+    "notices": [
+      {
+        "name": "Mozilla-MPL-2.0.txt",
+        "url": "https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt",
+        "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+      },
+      {
+        "name": "Mozilla-Third-Party.html",
+        "url": "https://hg.mozilla.org/releases/mozilla-esr115/raw-file/FIREFOX_115_45_0esr_RELEASE/toolkit/content/license.html",
+        "sha256": "19cfc871a60148646951934dc1f468ec5054291accca59201ed85f9c4afb8e35"
+      }
+    ]
+  }
+}

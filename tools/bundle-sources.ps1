@@ -27,6 +27,17 @@ foreach ($key in $sources.Keys) {
         throw "Source archive did not match the dependency lock: $key"
     }
 }
+$layoutAssets = @()
+$layoutCache = Join-Path $downloads 'opendoc'
+if (Test-Path -LiteralPath $layoutCache -PathType Container) {
+    $layoutLock = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'opendoc-assets.json') -Raw | ConvertFrom-Json
+    $layoutAssets = @($layoutLock.opendoc.files) + @($layoutLock.opendoc.notices)
+    foreach ($asset in $layoutAssets) {
+        if ((Get-FileHash -LiteralPath (Join-Path $layoutCache $asset.name)).Hash -ne $asset.sha256) {
+            throw "OpenDoc build asset did not match its lock: $($asset.name)"
+        }
+    }
+}
 
 $token = [Guid]::NewGuid().ToString('N')
 $headers = Join-Path $Work "amf-headers-$token.tar.gz"
@@ -47,6 +58,10 @@ try {
         }
         foreach ($name in 'README.md', 'installer/THIRD-PARTY.txt') {
             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $project $name), $name) | Out-Null
+        }
+        foreach ($asset in $layoutAssets) {
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $layoutCache $asset.name),
+                "downloads/opendoc/$($asset.name)", [IO.Compression.CompressionLevel]::Optimal) | Out-Null
         }
     } finally {
         $zip.Dispose()

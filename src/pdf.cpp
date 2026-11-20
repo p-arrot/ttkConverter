@@ -1,5 +1,6 @@
 #include "ttk.hpp"
 #include "pdf_layout.hpp"
+#include "pdf_ocr_layout.hpp"
 
 #include <windows.h>
 
@@ -521,6 +522,41 @@ void stageConfig(const fs::path& scratch, const Cancel& cancel) {
     }
 }
 
+bool isDocxPackage(const fs::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    std::array<char, 4> header{};
+    return file.read(header.data(), header.size()) &&
+        header == std::array<char, 4>{'P', 'K', 3, 4};
+}
+
+bool tryStructuredPdf(const fs::path& runtime, const fs::path& worker, const fs::path& scratch,
+                      const fs::path& output, const Cancel& cancel, const Progress& progress) {
+    const auto resultFile = scratch / L"output.docx";
+    std::ofstream settings(scratch / L"opendoc-job.json", std::ios::binary);
+    settings << R"({"mode":"fixed"})";
+    settings.close();
+    if (!settings) return false;
+    if (progress) progress(5, L"正在重建可编辑文字和原稿版式");
+    checkCancelled(cancel);
+    const auto onOutput = [&](const std::string& line) {
+        constexpr std::string_view prefix = "page=";
+        if (!progress || line.compare(0, prefix.size(), prefix) != 0) return;
+        const std::string_view value{line.data() + prefix.size(), line.size() - prefix.size()};
+        const auto slash = value.find('/');
+        int complete = 0, total = 0;
+        if (slash == std::string_view::npos || !parseNumber(value.substr(0, slash), complete) ||
+            !parseNumber(value.substr(slash + 1), total) || complete < 0 || total <= 0 || complete > total) return;
+        progress(5 + static_cast<int>(static_cast<int64_t>(complete) * 90 / total),
+                 L"正在还原版式 " + std::to_wstring(complete) + L"/" + std::to_wstring(total));
+    };
+    const auto result = runProcess(runtime, {L"-m", worker.wstring(), L"--", runtime.parent_path().wstring()},
+                                   cancel, scratch, onOutput);
+    if (result.cancelled || cancel.load()) throw PdfCancelled{};
+    if (result.exitCode != 0 || !isDocxPackage(resultFile)) return false;
+    stageFile(resultFile, output, cancel, L"无法保存高保真 Word 文件。");
+    return true;
+}
+
 std::string runEngine(const fs::path& executable, const std::vector<std::wstring>& args,
                       const fs::path& scratch, const Cancel& cancel, const wchar_t* failure) {
     checkCancelled(cancel);
@@ -698,10 +734,15 @@ bool appendRecognizedPage(std::string& xml, int page, int requestedDpi, const fs
          L"-c", L"tessedit_create_tsv=1", L"-c", L"tessedit_create_txt=1"},
         scratch, cancel, L"无法完成扫描页文字识别。");
     const auto recognized = readText(scratch / L"recognized.txt");
-    int tolerance = 0;
-    const auto rows = ocrRows(parseTsv(readText(scratch / L"recognized.tsv")), tolerance);
     const bool hasText = hasUsableText(recognized);
-    if (hasText && !appendRows(xml, rows, tolerance)) appendParagraphs(xml, recognized);
+    if (hasText) {
+        const auto tsv = readText(scratch / L"recognized.tsv");
+        if (!pdf_ocr_layout::appendOcrPage(xml, recognized, tsv, dpi)) {
+            int tolerance = 0;
+            const auto rows = ocrRows(parseTsv(tsv), tolerance);
+            if (!appendRows(xml, rows, tolerance)) appendParagraphs(xml, recognized);
+        }
+    }
     std::error_code ignored;
     fs::remove(scratch / image, ignored);
     fs::remove(scratch / L"recognized.txt", ignored);
@@ -710,6 +751,13 @@ bool appendRecognizedPage(std::string& xml, int page, int requestedDpi, const fs
 }
 
 } // namespace
+
+bool hasStructuredPdfEngine() {
+    const auto runtime = enginePath(L"pdf/opendoc/js.exe");
+    const auto worker = enginePath(L"pdf/opendoc/convert.mjs");
+    std::error_code error;
+    return !runtime.empty() && fs::is_regular_file(runtime, error) && fs::is_regular_file(worker, error);
+}
 
 Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::path& scratch,
                   const Cancel& cancel, const Progress& progress) {
@@ -730,12 +778,22 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
         std::vector<std::string_view> textPages;
         std::vector<std::string_view> layoutPages;
         std::vector<std::string_view> geometryPages;
+        bool structuredFailed = false;
         if (!job.options.forceOcr) {
             const auto extractor = enginePath(L"pdftotext.exe");
             runEngine(extractor, {L"-cfg", L"xpdfrc", L"-enc", L"UTF-8", L"-eol", L"unix", L"input.pdf", L"text.txt"},
                       scratch, cancel, L"无法提取 PDF 文字。");
             text = readText(scratch / L"text.txt");
             textPages = splitPages(text, static_cast<size_t>(pages));
+            if (hasStructuredPdfEngine() &&
+                std::all_of(textPages.begin(), textPages.end(), hasUsableText)) {
+                if (tryStructuredPdf(enginePath(L"pdf/opendoc/js.exe"), enginePath(L"pdf/opendoc/convert.mjs"),
+                                     scratch, temporaryOutput, cancel, progress)) {
+                    return {true, false, L"已按原稿布局生成可编辑 Word 文件。", {}, temporaryOutput};
+                }
+                structuredFailed = true;
+                if (progress) progress(6, L"高保真引擎未能完成，正在使用基础排版");
+            }
             if (hasUsableText(text)) {
                 runEngine(extractor, {L"-cfg", L"xpdfrc", L"-enc", L"UTF-8", L"-eol", L"unix", L"-layout", L"input.pdf", L"layout.txt"},
                           scratch, cancel, L"无法分析 PDF 表格布局。");
@@ -799,7 +857,7 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
         if (progress) progress(96, L"正在写入可编辑 Word 文件");
         DocxPackage{temporaryOutput, cancel}.finish(xml);
         checkCancelled(cancel);
-        std::wstring message = L"已生成可编辑的 Word 文件。";
+        std::wstring message = structuredFailed ? L"已用基础排版生成可编辑的 Word 文件。" : L"已生成可编辑的 Word 文件。";
         if (unrecognizedPages > 0) message += L" 有 " + std::to_wstring(unrecognizedPages) + L" 页未识别到文字。";
         return {true, false, std::move(message), {}, temporaryOutput};
     } catch (const PdfCancelled&) {

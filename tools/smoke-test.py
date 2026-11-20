@@ -108,6 +108,18 @@ def make_fixtures(directory, ffmpeg):
     pdf.drawImage(ImageReader(scan), 35, 300, width=525, height=205)
     pdf.save()
 
+    pdf = canvas.Canvas(str(directory / "图文排版.pdf"), pagesize=A4)
+    pdf.setFont("Helvetica-Bold", 20)
+    pdf.drawString(42, 775, "Editable layout")
+    pdf.drawImage(ImageReader(scan), 42, 600, width=310, height=140)
+    pdf.grid([360, 415, 495], [630, 670, 710])
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(370, 690, "Item")
+    pdf.drawString(425, 690, "Value")
+    pdf.drawString(370, 650, "Orange")
+    pdf.drawString(425, 650, "12")
+    pdf.save()
+
 
 def streams(probe, path):
     return json.loads(run(probe, "-v", "error", "-show_streams", "-of", "json", path))["streams"]
@@ -168,6 +180,25 @@ def check_editable_layout(app, source, output):
     assert title.find(f".//{W}rPr/{W}sz").get(W + "val") == "44"
     assert body.find(f".//{W}rPr/{W}i") is not None
     print("PASS editable PDF layout retains centered heading, sizing, bold and italics", flush=True)
+
+
+def check_structured_pdf(app, source, output):
+    path = convert(app, "pdf-docx", source, output, "--pdf-mode", "editable")
+    text, body = read_docx(path)
+    assert "Editablelayout" in "".join(text.split()), text
+    assert next(body.iter(W + "txbxContent"), None) is not None, "Expected positioned editable text"
+    assert next(body.iter(W + "drawing"), None) is not None, "Expected embedded illustration"
+    with zipfile.ZipFile(path) as package:
+        assert any(name.startswith("word/media/") for name in package.namelist())
+    cancel_output = output / "取消高保真转换"
+    cancelled = subprocess.run(
+        [str(app), "--convert", "pdf-docx", str(source), str(cancel_output), "--cancel-on-progress"],
+        capture_output=True, timeout=120,
+    )
+    assert cancelled.returncode == 130 and not (
+        cancel_output.exists() and any(cancel_output.iterdir())
+    ), cancelled.stderr
+    print("PASS structured PDF retains positioned editable text and images", flush=True)
 
 
 def check_video_settings(app, probe, source, directory):
@@ -313,9 +344,12 @@ def smoke(app, directory, fixtures, exhaustive):
     assert original and original == run(*hash_packets, remuxed), "Video packets changed during remux"
     print("PASS lossless remux", flush=True)
 
+    structured_engine = (app.parent / "engines" / "pdf" / "opendoc" / "convert.mjs").is_file()
     text, body = read_docx(convert(app, "pdf-docx", fixtures / "可编辑文本.pdf", output))
-    assert "Editable PDF sample" in text and "文字测试" in text, text
-    assert next(body.iter(W + "tbl"), None) is not None, "Expected editable table"
+    compact_text = "".join(text.split())
+    assert "EditablePDFsample" in compact_text and "文字测试" in compact_text, text
+    if not structured_engine:
+        assert next(body.iter(W + "tbl"), None) is not None, "Expected editable table"
     text, _ = read_docx(convert(app, "pdf-docx", fixtures / "中英扫描.pdf", output))
     normalized = "".join(text.split())
     assert "ORANGECAT" in normalized and "简体中文" in normalized and "样本" in normalized, text
@@ -328,6 +362,9 @@ def smoke(app, directory, fixtures, exhaustive):
         check_editable_layout(app, layout_fixture, output)
     else:
         check_pdf_layout(app, fixtures / "混合页面.pdf", output)
+    graphic_fixture = fixtures / "图文排版.pdf"
+    if structured_engine and graphic_fixture.is_file():
+        check_structured_pdf(app, graphic_fixture, output)
     cancelled = subprocess.run(
         [str(app), "--convert", "mp4-av1", str(video), str(directory / "取消测试"), "--cancel-on-progress"],
         capture_output=True, timeout=120,

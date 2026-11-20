@@ -8,13 +8,13 @@ ttkConverter 是一款使用 C++17 和原生 Windows 界面开发的离线转换
 
 | 对应系统 | 安装包 |
 | --- | --- |
-| Windows 10 或 Windows 11，64 位 | `ttkConverter-1.2.1-Win10-11-x64-Setup.exe` |
-| Windows 7 SP1，64 位 | `ttkConverter-1.2.1-Win7-SP1-x64-Setup.exe` |
-| Windows 7 SP1，32 位 | `ttkConverter-1.2.1-Win7-SP1-x86-Setup.exe` |
+| Windows 10 或 Windows 11，64 位 | `ttkConverter-1.3.0-Win10-11-x64-Setup.exe` |
+| Windows 7 SP1，64 位 | `ttkConverter-1.3.0-Win7-SP1-x64-Setup.exe` |
+| Windows 7 SP1，32 位 | `ttkConverter-1.3.0-Win7-SP1-x86-Setup.exe` |
 
 从 [GitHub Releases](https://github.com/p-arrot/ttkConverter/releases/latest) 下载对应安装包。安装包为当前用户安装，并自带 FFmpeg 和 OCR 引擎。Windows 7 可在「控制面板 → 系统」查看位数，用 `winver` 核对 SP1（内部版本 7601）。可用 `certutil -hashfile "安装包路径" SHA256` 对照发布页的校验值。
 
-首次安装的位置为 `%LOCALAPPDATA%\Programs\ttkConverter`，开始菜单显示「ttkConverter」。检测到 1.1.x 或 1.2.0 时，安装器显示版本和目录，并在原目录升级。检测到旧路径中的 1.0.0 时，可以在新版安装成功后移除旧程序，也可以保留旧版。应用设置和转换结果保留。
+首次安装的位置为 `%LOCALAPPDATA%\Programs\ttkConverter`，开始菜单显示「ttkConverter」。检测到 1.1.x 或 1.2.x 时，安装器显示版本和目录，并在原目录升级。检测到旧路径中的 1.0.0 时，可以在新版安装成功后移除旧程序，也可以保留旧版。应用设置和转换结果保留。
 
 ## 转换文件
 
@@ -24,8 +24,9 @@ ttkConverter 是一款使用 C++17 和原生 Windows 界面开发的离线转换
 - 选中带音轨的视频，点「提取音频」即可切到音频输出。默认 MP3，可改选 WAV、FLAC、M4A 等。点「转回视频」可恢复视频输出。
 - 图片可选原始尺寸、长边 320 至 3840 像素或自定义宽高。有损格式另有画质档位。ICO 提供 16 至 256 像素的方形尺寸预设，有需要时用透明区域填充。
 - 音频按输出格式提供采样率。支持有损码率的格式可选自动或 32 至 320 kb/s 的常用档位，可用码率随编码和采样率更新。选择自动码率时由音质档位决定压缩程度。
-- PDF 转 Word 默认「保留原版式」。原稿每页作为一张图片插入 Word，保留图片、颜色、位置及横竖方向。可以编辑整页图片，页内文字嵌在图像里。清晰度可选 150、200、300 或 400 DPI。
-- 需要改正文或复制文字时，选「可编辑文字」。该模式从文字层重建段落和简单表格，扫描页可用 200、300 或 400 DPI 执行中英文 OCR。复杂排版和图文混排可能变化。
+- PDF 转 Word 默认「可编辑文字」。对于各页均有文字层的 PDF，OpenDoc 离线保留页面和图文位置，把正文保存为可编辑文本框。表格线和流程图按原位置重建。表格外观可保留，单元格不一定会生成 Word 原生表格。
+- 含扫描页的 PDF 会提取已有文字层，并用 Tesseract 识别扫描页。OCR 提供 200、300、400 DPI，改进双栏阅读顺序、标题和简单表格。也可在高级设置中强制整份 PDF 进行 OCR。OpenDoc 排版需要支持 SSE4.1 的处理器，运行时不可用时会使用基础排版。
+- 「保留原版式」以整页图片保留颜色、位置和横竖方向。可在 Word 中编辑整页图片，清晰度可选 150、200、300 或 400 DPI。
 - 可以随时添加文件、更改未开始的任务和保存位置，再点击「开始转换」。默认结果写到源文件旁的「ttkConverter 输出」文件夹。同名输出自动加序号。通过「任务操作」可以打开结果、查看失败详情或重试。
 
 欢迎图、左上角头像和程序 ICO 均以用户提供的橘猫照片为参考，用内置 ImageGen 生成日系赛璐璐插画。PNG 源文件和完整提示词在 `assets/`。应用标题用内嵌的 ttk Rounded（基于 Nunito），中文界面使用系统字体。
@@ -49,7 +50,7 @@ PowerShell 与 MSYS2 设置同一个 `TTK_BUILD_ROOT`。默认使用 `%LOCALAPPD
 
 1. 在 PowerShell 中运行 `./tools/prepare-deps.ps1 -InstallInno -StagePdf`，下载依赖并从固定源码准备 32 位和 64 位 PDF/OCR 引擎。
 2. 在 MSYS2 Bash 中运行 `bash tools/build-media.sh x86` 和 `bash tools/build-media.sh x64`，然后运行 `bash tools/build-media.sh modern`。现代媒体引擎复用 x64 编解码库。
-3. 回到 PowerShell，运行 `./tools/build-app.ps1 -Edition Win10-11-x64 -Package`。`-Edition` 也可选 `Win7-SP1-x64` 或 `Win7-SP1-x86`，安装包写入 `release/`。
+3. 回到 PowerShell，运行 `./tools/prepare-opendoc.ps1` 准备离线版式引擎，再运行 `./tools/build-app.ps1 -Edition Win10-11-x64 -Package`。`-Edition` 也可选 `Win7-SP1-x64` 或 `Win7-SP1-x86`，安装包写入 `release/`。如果固定版本的 OpenDoc 部署文件已更新，可从发布页的第三方源码压缩包取出 `downloads/opendoc/` 放在构建目录下。
 4. 对包含 `engines/` 的暂存或已安装程序运行 `python tools/smoke-test.py --app <程序路径> --all-formats --fixtures <样本目录>`。样本可从发布页下载。自行生成样本时需要 Pillow、ReportLab、简体中文字体和支持 `lavfi` 的开发用 FFmpeg，通过 `--ffmpeg` 指定它。
 
 ## 交付验收清单
