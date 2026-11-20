@@ -115,6 +115,16 @@ Invoke-CMake @('--build', $ftBuild, '--target', 'install', '--parallel', $Jobs)
 
 $xpdfSource = Join-Path $sources 'xpdf-4.06'
 $xpdfBuild = Join-Path $build 'xpdf'
+$layoutPatch = Join-Path $PSScriptRoot 'xpdf-layout.patch'
+$layoutStamp = Join-Path $xpdfSource '.ttk-layout-sha256'
+$layoutHash = (Get-FileHash -LiteralPath $layoutPatch -Algorithm SHA256).Hash
+if (!(Test-Path -LiteralPath $layoutStamp) -or (Get-Content -Raw -LiteralPath $layoutStamp).Trim() -ne $layoutHash) {
+    & tar.exe -xf (Join-Path $downloads 'xpdf_source') -C $sources 'xpdf-4.06/xpdf/pdftotext.cc'
+    if ($LASTEXITCODE) { throw 'Could not restore the pinned pdftotext source' }
+    & git.exe -C $xpdfSource apply --whitespace=nowarn $layoutPatch
+    if ($LASTEXITCODE) { throw 'Could not apply the pinned Xpdf layout patch' }
+    $layoutHash | Set-Content -LiteralPath $layoutStamp -Encoding ascii
+}
 Invoke-CMake (@('-S', $xpdfSource, '-B', $xpdfBuild,
     '-DNO_FONTCONFIG=ON', '-DCMAKE_DISABLE_FIND_PACKAGE_Qt5Widgets=TRUE', '-DCMAKE_DISABLE_FIND_PACKAGE_Qt6Widgets=TRUE',
     "-DFREETYPE_INCLUDE_DIR_ft2build=$prefix/include/freetype2", "-DFREETYPE_INCLUDE_DIR_freetype_freetype=$prefix/include/freetype2",
@@ -135,10 +145,13 @@ Copy-Item -LiteralPath "$xpdfSource/README", "$xpdfSource/COPYING", "$xpdfSource
 Copy-Item -LiteralPath "$ftSource/docs/FTL.TXT", "$ftSource/docs/GPLv2.TXT" -Destination $notices -Force
 Copy-Item -LiteralPath "$pngSource/LICENSE" -Destination (Join-Path $notices 'libpng-LICENSE.txt') -Force
 Copy-Item -LiteralPath "$zlibSource/LICENSE" -Destination (Join-Path $notices 'zlib-LICENSE.txt') -Force
+Copy-Item -LiteralPath $layoutPatch -Destination $notices -Force
+Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $notices 'build-xpdf.ps1') -Force
 $assets | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $notices 'source-manifest.json') -Encoding utf8
 @'
 Xpdf 4.06 command-line tools built by tools/build-xpdf.ps1 with FreeType 2.14.3, libpng 1.6.59 and zlib 1.3.1.
 This build uses the GPL version 2 option for Xpdf and FreeType.
+The adjacent xpdf-layout.patch adds the optional pdftotext geometry output.
 '@ |
     Set-Content -LiteralPath (Join-Path $notices 'build-info.txt') -Encoding utf8
 Get-ChildItem -LiteralPath $output -Filter '*.exe' | Select-Object Name, Length

@@ -1,0 +1,160 @@
+--- a/xpdf/pdftotext.cc
++++ b/xpdf/pdftotext.cc
+@@ -10,11 +10,14 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <stddef.h>
++#include <utility>
++#include <cmath>
+ #include <string.h>
+ #ifdef DEBUG_FP_LINUX
+ #  include <fenv.h>
+ #  include <fpu_control.h>
+ #endif
++#include "gfile.h"
+ #include "gmem.h"
+ #include "gmempp.h"
+ #include "parseargs.h"
+@@ -39,6 +42,7 @@
+ static int firstPage = 1;
+ static int lastPage = 0;
+ static GBool physLayout = gFalse;
++static GBool ttkLayout = gFalse;
+ static GBool simpleLayout = gFalse;
+ static GBool simple2Layout = gFalse;
+ static GBool tableLayout = gFalse;
+@@ -70,6 +74,8 @@
+    "first page to convert"},
+   {"-l",       argInt,      &lastPage,      0,
+    "last page to convert"},
++  {"-ttk-layout", argFlag, &ttkLayout, 0,
++   "write ttkConverter word geometry as UTF-8 hexadecimal TSV (page form feeds)"},
+   {"-layout",  argFlag,     &physLayout,    0,
+    "maintain original physical layout"},
+   {"-simple",  argFlag,     &simpleLayout,  0,
+@@ -131,6 +137,103 @@
+   {NULL}
+ };
+ 
++// The ttkConverter consumer uses this optional, versioned geometry sidecar.
++// All coordinates are hundredths of a PDF point, measured from the top left.
++static long ttkCentipoints(double value) {
++  if (!std::isfinite(value)) {
++    return 0;
++  }
++  if (value < -20000000.0 || value > 20000000.0) {
++    return 0;
++  }
++  return (long)std::lround(value * 100.0);
++}
++
++static int ttkWordFlags(TextWord *word) {
++  TextFontInfo *font = word->getFontInfo();
++  GString *fontName = word->getFontName();
++  const char *name = fontName ? fontName->getCString() : "";
++  int flags = 0;
++  if ((font && font->isBold()) || strstr(name, "Bold") ||
++      strstr(name, "Black") || strstr(name, "Demi")) {
++    flags |= 1;
++  }
++  if ((font && font->isItalic()) || strstr(name, "Italic") ||
++      strstr(name, "Oblique")) {
++    flags |= 2;
++  }
++  if (word->isRotated() || word->getRotation() != 0 ||
++      word->getDirection() < 0) {
++    flags |= 4;
++  }
++  return flags;
++}
++
++static int writeTtkLayout(PDFDoc *doc, const char *name,
++                          TextOutputControl *control) {
++  const bool useStdout = !strcmp(name, "-");
++  FILE *stream = useStdout ? stdout : openFile(name, "wb");
++  if (!stream) {
++    error(errIO, -1, "Couldn't open text file '{0:s}'", name);
++    return 2;
++  }
++
++  constexpr char hex[] = "0123456789abcdef";
++  TextOutputDev output((char *)NULL, control, gFalse);
++  for (int page = firstPage; page <= lastPage; ++page) {
++    doc->displayPage(&output, NULL, page, 72, 72, 0, gFalse, gTrue, gFalse);
++    TextPage *text = output.takeText();
++    double width = doc->getPageCropWidth(page);
++    double height = doc->getPageCropHeight(page);
++    if (doc->getPageRotate(page) % 180 != 0) {
++      std::swap(width, height);
++    }
++    fprintf(stream, "P\t%ld\t%ld\n", ttkCentipoints(width),
++            ttkCentipoints(height));
++    GList *columns = text->makeColumns();
++    for (int c = 0; c < columns->getLength(); ++c) {
++      GList *paragraphs = ((TextColumn *)columns->get(c))->getParagraphs();
++      for (int p = 0; p < paragraphs->getLength(); ++p) {
++        GList *lines = ((TextParagraph *)paragraphs->get(p))->getLines();
++        for (int l = 0; l < lines->getLength(); ++l) {
++          GList *words = ((TextLine *)lines->get(l))->getWords();
++          for (int w = 0; w < words->getLength(); ++w) {
++            TextWord *word = (TextWord *)words->get(w);
++            GString *value = word->getText();
++            if (!value || !value->getLength()) {
++              delete value;
++              continue;
++            }
++            double left, top, right, bottom;
++            word->getBBox(&left, &top, &right, &bottom);
++            fprintf(stream, "W\t%d\t%d\t%d\t%ld\t%ld\t%ld\t%ld\t%ld\t%d\t%d\t",
++                    c, p, l, ttkCentipoints(left), ttkCentipoints(top),
++                    ttkCentipoints(right), ttkCentipoints(bottom),
++                    ttkCentipoints(word->getFontSize()), ttkWordFlags(word),
++                    word->getSpaceAfter() ? 1 : 0);
++            for (int i = 0; i < value->getLength(); ++i) {
++              const unsigned char byte = (unsigned char)value->getCString()[i];
++              fputc(hex[byte >> 4], stream);
++              fputc(hex[byte & 15], stream);
++            }
++            fputc('\n', stream);
++            delete value;
++          }
++        }
++      }
++    }
++    deleteGList(columns, TextColumn);
++    delete text;
++    fputc('\f', stream);
++    if (ferror(stream)) {
++      break;
++    }
++  }
++  const bool failed = ferror(stream) != 0;
++  const int status = useStdout ? fflush(stream) : fclose(stream);
++  return failed || status != 0 ? 2 : 0;
++}
++
+ int main(int argc, char *argv[]) {
+ #if USE_EXCEPTIONS
+   try {
+@@ -201,7 +304,9 @@
+ 	  cfgFileName);
+   }
+   globalParams = new GlobalParams(cfgFileName);
+-  if (textEncName[0]) {
++  if (ttkLayout) {
++    globalParams->setTextEncoding("UTF-8");
++  } else if (textEncName[0]) {
+     globalParams->setTextEncoding(textEncName);
+   }
+   if (textEOL[0]) {
+@@ -307,6 +412,10 @@
+   textOutControl.marginRight = marginRight;
+   textOutControl.marginTop = marginTop;
+   textOutControl.marginBottom = marginBottom;
++  if (ttkLayout) {
++    exitCode = writeTtkLayout(doc, textFileName->getCString(), &textOutControl);
++    goto err3;
++  }
+   textOut = new TextOutputDev(textFileName->getCString(), &textOutControl,
+ 			      gFalse, gTrue);
+   if (textOut->isOk()) {

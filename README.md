@@ -8,23 +8,24 @@ ttkConverter 是一款使用 C++17 和原生 Windows 界面开发的离线转换
 
 | 对应系统 | 安装包 |
 | --- | --- |
-| Windows 10 或 Windows 11，64 位 | `ttkConverter-1.2.0-Win10-11-x64-Setup.exe` |
-| Windows 7 SP1，64 位 | `ttkConverter-1.2.0-Win7-SP1-x64-Setup.exe` |
-| Windows 7 SP1，32 位 | `ttkConverter-1.2.0-Win7-SP1-x86-Setup.exe` |
+| Windows 10 或 Windows 11，64 位 | `ttkConverter-1.2.1-Win10-11-x64-Setup.exe` |
+| Windows 7 SP1，64 位 | `ttkConverter-1.2.1-Win7-SP1-x64-Setup.exe` |
+| Windows 7 SP1，32 位 | `ttkConverter-1.2.1-Win7-SP1-x86-Setup.exe` |
 
 从 [GitHub Releases](https://github.com/p-arrot/ttkConverter/releases/latest) 下载对应安装包。安装包为当前用户安装，并自带 FFmpeg 和 OCR 引擎。Windows 7 可在「控制面板 → 系统」查看位数，用 `winver` 核对 SP1（内部版本 7601）。可用 `certutil -hashfile "安装包路径" SHA256` 对照发布页的校验值。
 
-首次安装的位置为 `%LOCALAPPDATA%\Programs\ttkConverter`，开始菜单显示「ttkConverter」。检测到 1.1.x 时，安装器显示版本和目录，并在原目录升级。检测到旧路径中的 1.0.0 时，可以在新版安装成功后移除旧程序，也可以保留旧版。应用设置和转换结果保留。
+首次安装的位置为 `%LOCALAPPDATA%\Programs\ttkConverter`，开始菜单显示「ttkConverter」。检测到 1.1.x 或 1.2.0 时，安装器显示版本和目录，并在原目录升级。检测到旧路径中的 1.0.0 时，可以在新版安装成功后移除旧程序，也可以保留旧版。应用设置和转换结果保留。
 
 ## 转换文件
 
-- 点击「添加文件」、按 `Ctrl+O` 或拖入文件，程序会分类并推荐输出。选中视频可在「源文件」看到原容器、视频编码、尺寸和音频编码。
-- 视频可在任务区直接选择「原始」、144p、240p、360p、480p、540p、720p、1080p、1440p 或 4K，也可以在高级设置里指定像素宽度和高度。使用预设时画面按原比例缩放，例如 4:3 视频选择 1080p 时输出 1440×1080。
+- 点击「添加文件」、按 `Ctrl+O` 或拖入文件，程序会分类并推荐输出。选中视频可在「源文件」看到原封装、编码、像素尺寸和画幅，转换前可查看预计输出，完成后可查看成品的实际尺寸和画幅。
+- 视频可直接选择「原始」、144p、240p、360p、480p、540p、720p、1080p、1440p 或 4K，也可以在高级设置里指定像素宽度和高度。16:9 时，1080p 对应 1920×1080，1440p 对应 2560×1440，4K 对应 3840×2160。预设按原画幅缩放，例如 4:3 视频选择 1080p 时输出 1440×1080。
 - 质量与分辨率分别选择。质量预设包含快速、高画质、平衡、较小体积、低画质和极低画质。
 - 选中带音轨的视频，点「提取音频」即可切到音频输出。默认 MP3，可改选 WAV、FLAC、M4A 等。点「转回视频」可恢复视频输出。
 - 图片可选原始尺寸、长边 320 至 3840 像素或自定义宽高。有损格式另有画质档位。ICO 提供 16 至 256 像素的方形尺寸预设，有需要时用透明区域填充。
 - 音频按输出格式提供采样率。支持有损码率的格式可选自动或 32 至 320 kb/s 的常用档位，可用码率随编码和采样率更新。选择自动码率时由音质档位决定压缩程度。
-- PDF 转 Word 提供 200、300、400 DPI，扫描页或强制 OCR 时生效。
+- PDF 转 Word 默认「保留原版式」。原稿每页作为一张图片插入 Word，保留图片、颜色、位置及横竖方向。可以编辑整页图片，页内文字嵌在图像里。清晰度可选 150、200、300 或 400 DPI。
+- 需要改正文或复制文字时，选「可编辑文字」。该模式从文字层重建段落和简单表格，扫描页可用 200、300 或 400 DPI 执行中英文 OCR。复杂排版和图文混排可能变化。
 - 可以随时添加文件、更改未开始的任务和保存位置，再点击「开始转换」。默认结果写到源文件旁的「ttkConverter 输出」文件夹。同名输出自动加序号。通过「任务操作」可以打开结果、查看失败详情或重试。
 
 欢迎图、左上角头像和程序 ICO 均以用户提供的橘猫照片为参考，用内置 ImageGen 生成日系赛璐璐插画。PNG 源文件和完整提示词在 `assets/`。应用标题用内嵌的 ttk Rounded（基于 Nunito），中文界面使用系统字体。
@@ -36,7 +37,7 @@ ttkConverter 是一款使用 C++17 和原生 Windows 界面开发的离线转换
 | 视频 | MP4、MKV、MOV、WebM、AVI、WMV、MPG、TS、FLV。MP4 与 MKV 提供 H.264、H.265、AV1，MOV 提供 H.264、H.265，WebM 提供 VP8、VP9、AV1。 |
 | 音频 | MP3、AAC、M4A（AAC 或 ALAC）、WAV、FLAC、AIFF、OGG、Opus、AC-3。也可从视频提取音频。 |
 | 图片 | JPEG、PNG、WebP、BMP、TIFF、TGA、ICO、AVIF、GIF、APNG。可读取常见静态 HEIC。需要保留动画时可选 GIF 或 APNG。 |
-| 办公 | PDF 转可编辑 Word（DOCX）。直接提取有文字层的页面，自动对扫描页运行简体中文和英文 OCR，可重建部分简单表格。复杂表格、多栏、罕见字体和低清扫描件需对照原 PDF 校对。 |
+| 办公 | PDF 转 Word（DOCX），支持保留原版式和可编辑文字两种模式。 |
 
 H.264 预设适合常见设备。H.265 和 AV1 可选择 CPU 编码，在旧电脑上可能耗时较长。现代版的硬件编码选项依赖显卡、驱动和所选编码器，无法启用时会尝试软件编码。无损换封装要求源音视频流与目标容器兼容，保留原尺寸和码率。
 
@@ -49,7 +50,7 @@ PowerShell 与 MSYS2 设置同一个 `TTK_BUILD_ROOT`。默认使用 `%LOCALAPPD
 1. 在 PowerShell 中运行 `./tools/prepare-deps.ps1 -InstallInno -StagePdf`，下载依赖并从固定源码准备 32 位和 64 位 PDF/OCR 引擎。
 2. 在 MSYS2 Bash 中运行 `bash tools/build-media.sh x86` 和 `bash tools/build-media.sh x64`，然后运行 `bash tools/build-media.sh modern`。现代媒体引擎复用 x64 编解码库。
 3. 回到 PowerShell，运行 `./tools/build-app.ps1 -Edition Win10-11-x64 -Package`。`-Edition` 也可选 `Win7-SP1-x64` 或 `Win7-SP1-x86`，安装包写入 `release/`。
-4. 对包含 `engines/` 的暂存或已安装程序运行 `python tools/smoke-test.py --app <程序路径> --all-formats`。生成测试样本需要 Pillow、ReportLab 和简体中文字体。可以设置 `TTK_FIXTURE_CHINESE_FONT`，或通过 `--fixtures` 使用发布页的验收样本。
+4. 对包含 `engines/` 的暂存或已安装程序运行 `python tools/smoke-test.py --app <程序路径> --all-formats --fixtures <样本目录>`。样本可从发布页下载。自行生成样本时需要 Pillow、ReportLab、简体中文字体和支持 `lavfi` 的开发用 FFmpeg，通过 `--ffmpeg` 指定它。
 
 ## 交付验收清单
 
@@ -58,7 +59,7 @@ PowerShell 与 MSYS2 设置同一个 `TTK_BUILD_ROOT`。默认使用 `%LOCALAPPD
 - [ ] 分别在 Windows 10 或 11 x64、Windows 7 SP1 x64、Windows 7 SP1 x86 的目标电脑上校验对应安装包并安装。用普通用户账户打开程序，验证中文显示、桌面拖放、键盘操作和小窗口里主按钮的可见性。
 - [ ] 断网后一次加入带中文和空格的 MP4、PNG 与中英扫描 PDF。验证队列分类、源视频参数、中文高级设置、进度和「打开结果」。
 - [ ] 从同一段短视频输出 H.264、H.265、AV1，并用安装包内的 FFmpeg 或支持相应编码的播放器完整解码。测试 1080p、4K、竖屏、极低画质和同名输出。
-- [ ] 提取 64 kb/s MP3 并核对采样率。调整透明 PNG 长边并输出方形 ICO。用文本、扫描和混合 PDF 验证 200 至 400 DPI 的 OCR 选项、可编辑文字和表格。
+- [ ] 提取 64 kb/s MP3 并核对采样率。调整透明 PNG 长边并输出方形 ICO。用文本、扫描和混合 PDF 验证版式模式、可编辑文字和表格，以及 200 至 400 DPI 的 OCR 设置。
 - [ ] 转换长视频时停止批次。确认当次未生成半成品，其他任务仍可继续。再测试失败详情、重试、关闭、卸载和重新安装。
 - [ ] 用新版安装包识别并升级已有的 1.1.x，核对旧安装目录、设置及转换文件。迁移测试可运行 `tools/test-upgrade.ps1` 并传入新版、1.1.1 和 1.0.0 的 Windows 10/11 x64 安装包。
 

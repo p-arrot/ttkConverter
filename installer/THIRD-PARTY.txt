@@ -10,6 +10,7 @@ NVIDIA FFmpeg codec headers: https://github.com/FFmpeg/nv-codec-headers/tree/n12
 
 Xpdf Tools 4.06: https://www.xpdfreader.com/download.html
 Corresponding source: https://dl.xpdfreader.com/xpdf-4.06.tar.gz
+The bundled pdftotext includes the optional geometry output in tools/xpdf-layout.patch.
 Chinese character maps: https://dl.xpdfreader.com/xpdf-chinese-simplified.tar.gz
 
 Tesseract 5.3.0: https://github.com/tesseract-ocr/tesseract/tree/5.3.0

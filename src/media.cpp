@@ -5,6 +5,8 @@
 #include <cwctype>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -188,6 +190,8 @@ struct Stream {
     int width = 0;
     int height = 0;
     int rotation = 0;
+    int sampleAspectNumerator = 0;
+    int sampleAspectDenominator = 0;
     int frames = 0;
     int sampleRate = 0;
     int channels = 0;
@@ -238,10 +242,20 @@ int count(const std::string& value) {
     return parser >> parsed ? parsed : 0;
 }
 
+void readSampleAspect(const std::string& value, Stream& stream) {
+    std::istringstream parser(value);
+    int numerator = 0, denominator = 0;
+    char separator = 0;
+    if (parser >> numerator >> separator >> denominator && separator == ':' && numerator > 0 && denominator > 0) {
+        stream.sampleAspectNumerator = numerator;
+        stream.sampleAspectDenominator = denominator;
+    }
+}
+
 MediaInfo inspect(const fs::path& path, const Cancel& cancel) {
     const auto probe = runProcess(enginePath(L"ffprobe.exe"), {
         L"-v", L"error", L"-protocol_whitelist", L"file,pipe",
-        L"-show_entries", L"stream=index,codec_name,codec_type,width,height,duration,nb_frames,sample_rate,channels:"
+        L"-show_entries", L"stream=index,codec_name,codec_type,width,height,sample_aspect_ratio,duration,nb_frames,sample_rate,channels:"
             L"stream_disposition=attached_pic,default:stream_side_data=rotation:stream_group=type:"
             L"format=duration,format_name:format_tags=major_brand",
         L"-of", L"default", L"-i", path.wstring()
@@ -298,6 +312,7 @@ MediaInfo inspect(const fs::path& path, const Cancel& cancel) {
             if (key == "width") stream.width = count(value);
             if (key == "height") stream.height = count(value);
             if (key == "rotation") stream.rotation = count(value);
+            if (key == "sample_aspect_ratio") readSampleAspect(value, stream);
             if (key == "nb_frames") stream.frames = count(value);
             if (key == "sample_rate") stream.sampleRate = count(value);
             if (key == "channels") stream.channels = count(value);
@@ -533,9 +548,17 @@ std::wstring resizing(const Options& options, bool even) {
     return filter;
 }
 
+bool supportedVideoResolution(int value) {
+    return in(value, {144, 240, 360, 480, 540, 720, 1080, 1440, 2160});
+}
+
+int videoResolutionLongEdge(int shortEdge) {
+    return ((shortEdge * 16 + 9) / 18) * 2;
+}
+
 std::wstring fitVideoResolution(int resolution) {
     const auto shortEdge = std::to_wstring(resolution);
-    const auto longEdge = std::to_wstring(((resolution * 16 + 9) / 18) * 2);
+    const auto longEdge = std::to_wstring(videoResolutionLongEdge(resolution));
     // FFmpeg supplies the display ratio after applying input rotation. Scale
     // preserves that ratio through its output sample aspect ratio, including
     // input with non-square pixels and rounding to an even number of pixels.
@@ -545,6 +568,33 @@ std::wstring fitVideoResolution(int resolution) {
         + longEdge + L"," + shortEdge + L"/dar))";
     return L"scale=w='max(2,round((" + width + L")/2)*2)':h='max(2,round((" + height
         + L")/2)*2)':flags=lanczos";
+}
+
+using Aspect = std::pair<long long, long long>;
+
+Aspect reduceAspect(long long numerator, long long denominator) {
+    const auto common = std::gcd(numerator, denominator);
+    return {numerator / common, denominator / common};
+}
+
+Aspect applyVideoPadding(Aspect aspect, int width, int height, int paddedWidth, int paddedHeight) {
+    auto [numerator, denominator] = aspect;
+    auto [widthFactor, heightFactor] = reduceAspect(1LL * paddedWidth * height, 1LL * paddedHeight * width);
+    const auto cross1 = std::gcd(numerator, heightFactor);
+    const auto cross2 = std::gcd(denominator, widthFactor);
+    numerator /= cross1;
+    heightFactor /= cross1;
+    denominator /= cross2;
+    widthFactor /= cross2;
+    constexpr auto maximum = (std::numeric_limits<long long>::max)();
+    if (numerator > maximum / widthFactor || denominator > maximum / heightFactor) return {};
+    return {numerator * widthFactor, denominator * heightFactor};
+}
+
+long long scaledEvenDimension(int requested, int sourceOther, int sourceRequested) {
+    const auto scaled = 1LL * requested * sourceOther;
+    const auto divisor = 2LL * sourceRequested;
+    return (scaled / divisor + (scaled % divisor >= divisor / 2)) * 2;
 }
 
 std::wstring imageResize(const Options& options) {
@@ -809,6 +859,45 @@ std::vector<int> audioBitrates(const std::wstring& preset, int sampleRate) {
     return result;
 }
 
+VideoGeometry predictVideoGeometry(const SourceInfo& source, const Options& options) {
+    if (source.width <= 0 || source.height <= 0) return {};
+    const auto originalAspect = source.aspectNumerator > 0 && source.aspectDenominator > 0
+        ? Aspect{source.aspectNumerator, source.aspectDenominator} : reduceAspect(source.width, source.height);
+    const auto [numerator, denominator] = originalAspect;
+    if (options.remux) return {source.width, source.height, numerator, denominator};
+
+    const bool customSize = options.width > 0 || options.height > 0;
+    if (options.resolution != 0) {
+        if (customSize || !supportedVideoResolution(options.resolution)) return {};
+        const int shortEdge = options.resolution;
+        const int longEdge = videoResolutionLongEdge(shortEdge);
+        const double dar = static_cast<double>(numerator) / denominator;
+        const auto widthLimit = dar >= 1 ? (std::min)(static_cast<double>(longEdge), shortEdge * dar)
+                                        : (std::min)(static_cast<double>(shortEdge), longEdge * dar);
+        const auto heightLimit = dar >= 1 ? (std::min)(static_cast<double>(shortEdge), longEdge / dar)
+                                         : (std::min)(static_cast<double>(longEdge), shortEdge / dar);
+        const int width = (std::max)(2, static_cast<int>(std::round(widthLimit / 2)) * 2);
+        const int height = (std::max)(2, static_cast<int>(std::round(heightLimit / 2)) * 2);
+        const auto aspect = source.hasSampleAspect ? originalAspect : reduceAspect(width, height);
+        return {width, height, aspect.first, aspect.second};
+    }
+
+    long long width = source.width;
+    long long height = source.height;
+    if (customSize) {
+        width = options.width > 0 ? options.width : scaledEvenDimension(options.height, source.width, source.height);
+        height = options.height > 0 ? options.height : scaledEvenDimension(options.width, source.height, source.width);
+    }
+    constexpr int maximumEven = (std::numeric_limits<int>::max)() - 1;
+    if (width < 1 || height < 1 || width > maximumEven || height > maximumEven) return {};
+    const int paddedWidth = static_cast<int>(width + width % 2);
+    const int paddedHeight = static_cast<int>(height + height % 2);
+    const auto aspect = source.hasSampleAspect
+        ? applyVideoPadding(originalAspect, static_cast<int>(width), static_cast<int>(height), paddedWidth, paddedHeight)
+        : reduceAspect(paddedWidth, paddedHeight);
+    return {paddedWidth, paddedHeight, aspect.first, aspect.second};
+}
+
 SourceInfo probeMedia(const fs::path& input, const Cancel& cancel) {
     const auto media = inspect(input, cancel);
     SourceInfo source;
@@ -832,7 +921,20 @@ SourceInfo probeMedia(const fs::path& input, const Cancel& cancel) {
     if (media.hasVideo && !media.hasTiles) {
         source.width = media.video.width;
         source.height = media.video.height;
-        if (std::abs(media.video.rotation % 180) == 90) std::swap(source.width, source.height);
+        auto pixelWidth = media.video.sampleAspectNumerator;
+        auto pixelHeight = media.video.sampleAspectDenominator;
+        source.hasSampleAspect = pixelWidth > 0 && pixelHeight > 0;
+        if (std::abs(media.video.rotation % 180) == 90) {
+            std::swap(source.width, source.height);
+            std::swap(pixelWidth, pixelHeight);
+        }
+        if (source.width > 0 && source.height > 0) {
+            const auto [numerator, denominator] = source.hasSampleAspect
+                ? reduceAspect(1LL * source.width * pixelWidth, 1LL * source.height * pixelHeight)
+                : reduceAspect(source.width, source.height);
+            source.aspectNumerator = numerator;
+            source.aspectDenominator = denominator;
+        }
     }
 
     const auto append = [&source](std::wstring_view value) {
@@ -859,8 +961,7 @@ Result convertMedia(const Job& job, const fs::path& temporaryOutput,
     const bool customSize = job.options.width > 0 || job.options.height > 0;
     const bool resolutionPreset = videoOutput && job.options.resolution != 0;
     if (resolutionPreset) {
-        constexpr int resolutions[] = {144, 240, 360, 480, 540, 720, 1080, 1440, 2160};
-        if (std::find(std::begin(resolutions), std::end(resolutions), job.options.resolution) == std::end(resolutions)) {
+        if (!supportedVideoResolution(job.options.resolution)) {
             return {false, false, L"所选视频分辨率无效。", {}, {}};
         }
         if (customSize) return {false, false, L"请选择分辨率预设或自定义宽高，两者只能选一项。", {}, {}};

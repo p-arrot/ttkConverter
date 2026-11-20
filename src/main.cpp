@@ -16,6 +16,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <string_view>
 #include <thread>
@@ -34,7 +35,7 @@ constexpr wchar_t headingFace[] = L"ttk Rounded";
 enum Command {
     Add = 1000, Filter, Queue, TaskActions, Remove, Preset, Quality, Resolution, ExtractAudio,
     SampleRate, Advanced, OutputPath,
-    Browse, Start, StartSelected, Stop, Retry, Open, Details,
+    Browse, Start, StartSelected, Stop, Retry, Open, Details, PdfLayout, PdfEditable,
 };
 
 enum class Phase { Checking, Ready, Converting, Done, Failed, Cancelled, Unsupported };
@@ -45,6 +46,7 @@ namespace fs = ttk::fs;
 struct Task {
     ttk::Job job;
     ttk::SourceInfo source;
+    ttk::VideoGeometry outputGeometry;
     Phase phase = Phase::Checking;
     std::wstring status = L"等待检查";
     ttk::Result result;
@@ -55,6 +57,7 @@ enum class SettingChange { Preset, Quality, Advanced };
 
 struct WorkResult {
     ttk::SourceInfo source;
+    ttk::VideoGeometry outputGeometry;
     ttk::Result conversion;
 };
 
@@ -116,8 +119,9 @@ bool permitsQuality(const ttk::Preset& preset) {
     }
 }
 
-bool permitsAdvanced(const ttk::Preset& preset) {
-    return preset.id != L"ico";
+bool permitsAdvanced(const ttk::Preset& preset, const ttk::Options& options) {
+    return preset.id != L"ico" &&
+           (preset.kind != Kind::Pdf || options.pdfMode == ttk::EditableText);
 }
 
 bool sizeMenu(const OptionMenu& menu) {
@@ -169,8 +173,13 @@ std::pair<OptionMenu, OptionMenu> inlineMenus(const ttk::Preset& preset, const t
         break;
     }
     case Kind::Pdf:
-        primary = {L"OCR 精度", &ttk::Options::ocrDpi,
-                   {{200, L"200 DPI"}, {300, L"300 DPI"}, {400, L"400 DPI"}}};
+        if (options.pdfMode == ttk::EditableText) {
+            primary = {L"OCR 精度", &ttk::Options::ocrDpi,
+                       {{200, L"200 DPI"}, {300, L"300 DPI"}, {400, L"400 DPI"}}};
+        } else {
+            primary = {L"清晰度", &ttk::Options::pdfPageDpi,
+                       {{150, L"150 DPI"}, {200, L"200 DPI"}, {300, L"300 DPI"}, {400, L"400 DPI"}}};
+        }
         break;
     default:
         break;
@@ -266,6 +275,33 @@ int resolutionIndex(const ttk::Options& options) {
     return found == resolutions.end() ? 0 : static_cast<int>(found - resolutions.begin());
 }
 
+ttk::VideoGeometry videoGeometry(const ttk::SourceInfo& media) {
+    return {media.width, media.height, media.aspectNumerator, media.aspectDenominator};
+}
+
+std::wstring dimensionText(const ttk::VideoGeometry& geometry) {
+    if (geometry.width <= 0 || geometry.height <= 0) return {};
+    auto numerator = geometry.aspectNumerator;
+    auto denominator = geometry.aspectDenominator;
+    if (numerator <= 0 || denominator <= 0) {
+        numerator = geometry.width;
+        denominator = geometry.height;
+    }
+    const auto divisor = std::gcd(numerator, denominator);
+    return std::to_wstring(geometry.width) + L"×" + std::to_wstring(geometry.height) +
+        L" · " + std::to_wstring(numerator / divisor) + L":" + std::to_wstring(denominator / divisor);
+}
+
+std::wstring describeVideoOutput(const Task& task) {
+    if (task.source.kind != Kind::Video || outputKind(task) != Kind::Video) return {};
+    if (task.phase == Phase::Done) {
+        const auto dimensions = dimensionText(task.outputGeometry);
+        if (!dimensions.empty()) return L"实际输出：" + dimensions;
+    }
+    const auto dimensions = dimensionText(ttk::predictVideoGeometry(task.source, task.job.options));
+    return dimensions.empty() ? L"" : L"预计输出：" + dimensions;
+}
+
 std::wstring describeSource(const Task& task) {
     if (task.phase == Phase::Checking) return L"正在识别源文件…";
     if (task.source.kind == Kind::Unknown) return L"源文件：格式未识别";
@@ -277,7 +313,9 @@ std::wstring describeSource(const Task& task) {
         info += value;
     };
     add(task.source.videoCodec);
-    if (task.source.width > 0 && task.source.height > 0) {
+    if (task.source.kind == Kind::Video) {
+        add(dimensionText(videoGeometry(task.source)));
+    } else if (task.source.width > 0 && task.source.height > 0) {
         add(std::to_wstring(task.source.width) + L"×" + std::to_wstring(task.source.height));
     }
     add(task.source.audioCodec);
@@ -391,6 +429,18 @@ std::wstring windowText(HWND control) {
 
 void showText(HWND control, const std::wstring& text) {
     SetWindowTextW(control, text.c_str());
+}
+
+int textWidth(HWND control, HFONT font) {
+    const auto text = windowText(control);
+    const HDC dc = GetDC(control);
+    if (!dc) return 0;
+    const auto previous = font ? SelectObject(dc, font) : nullptr;
+    SIZE measured{};
+    GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &measured);
+    if (previous) SelectObject(dc, previous);
+    ReleaseDC(control, dc);
+    return measured.cx;
 }
 
 void addChoice(HWND combo, const wchar_t* text) {
@@ -569,7 +619,8 @@ private:
     HWND emptyFormats_ = nullptr;
     HWND presetLabel_ = nullptr;
     HWND preset_ = nullptr;
-    HWND fixedPreset_ = nullptr;
+    HWND pdfLayout_ = nullptr;
+    HWND pdfEditable_ = nullptr;
     HWND source_ = nullptr;
     HWND qualityLabel_ = nullptr;
     HWND quality_ = nullptr;
@@ -599,6 +650,7 @@ private:
     std::deque<TaskId> scheduled_;
     std::vector<const ttk::Preset*> choices_;
     bool morePresets_ = false;
+    bool mixedPdfModes_ = false;
     AudioAction audioAction_ = AudioAction::None;
     bool rebuilding_ = false;
     bool closing_ = false;
@@ -663,6 +715,7 @@ private:
     void pickDirectory();
     const ttk::Preset* selectedPreset() const;
     void applySettings(SettingChange change);
+    void applyPdfMode(ttk::PdfMode mode);
     void toggleAudioOutput();
     void editAdvanced(bool focusSize = false);
     static INT_PTR CALLBACK advancedDialog(HWND dialog, UINT message, WPARAM wp, LPARAM lp);
@@ -712,8 +765,9 @@ void Window::createControls() {
     source_ = label(L"");
     presetLabel_ = label(L"输出格式");
     preset_ = combo(Preset);
-    fixedPreset_ = label(L"Word 文档（.docx）");
-    qualityLabel_ = label(L"质量");
+    pdfLayout_ = button(L"保留原版式", PdfLayout, BS_AUTORADIOBUTTON | WS_GROUP);
+    pdfEditable_ = button(L"可编辑文字", PdfEditable, BS_AUTORADIOBUTTON);
+    qualityLabel_ = label(L"质量", SS_LEFT | WS_GROUP);
     quality_ = combo(Quality);
     advanced_ = button(L"高级设置…", Advanced);
     resolutionLabel_ = label(L"分辨率");
@@ -827,15 +881,19 @@ void Window::layout() {
     const bool showSettings = preset != nullptr;
     const bool fixedFormat = preset && preset->kind == Kind::Pdf;
     const bool showQuality = preset && permitsQuality(*preset);
-    const bool showAdvanced = preset && permitsAdvanced(*preset);
+    const bool showAdvanced = preset && !mixedPdfModes_ && permitsAdvanced(*preset, draftOptions_);
     const bool showPrimary = showSettings && primaryOption_.member != nullptr;
     const bool showSecondary = showSettings && secondaryOption_.member != nullptr;
     const bool showExtract = audioAction_ != AudioAction::None;
     const bool hasHint = !showSecondary && GetWindowTextLengthW(hint_) != 0;
     const bool extraRow = showSettings && (showPrimary || showExtract || hasHint);
+    const int narrowHint = content - 24 - 210 - (showExtract ? 103 : 0);
+    const bool separateVideoHint = preset && preset->kind == Kind::Video && hasHint &&
+        textWidth(hint_, captionFont_) + px(5) > px(narrowHint);
     const bool batchActive = !scheduled_.empty() || (active_ && !probing_);
     const bool showRows = hasTasks && ListView_GetItemCount(queue_) > 0;
-    const int settingsHeight = !showSource ? 0 : !showSettings ? 43 : extraRow ? 110 : 76;
+    const int settingsHeight = !showSource ? 0 : !showSettings ? (hasHint ? 65 : 43) :
+                               separateVideoHint ? 135 : extraRow ? 110 : 76;
     const int settingsY = footerY - settingsHeight - 10;
     const int queueBottom = !hasTasks ? height - pad : (showSource ? settingsY : footerY) - 10;
 
@@ -886,7 +944,8 @@ void Window::layout() {
     place(source_, inner, settingsY + 12, right - inner - (!showSettings && showExtract ? 104 : 0), 20);
     place(presetLabel_, inner, settingsY + 43, 70, 21);
     place(preset_, inner + 72, settingsY + 39, presetRight - inner - 72, 290);
-    place(fixedPreset_, inner + 72, settingsY + 42, right - inner - 72 - 104, 21);
+    place(pdfLayout_, inner + 74, settingsY + 37, 110, 29);
+    place(pdfEditable_, inner + 198, settingsY + 37, 110, 29);
     place(qualityLabel_, right - qualityWidth - 140, settingsY + 43, 36, 21);
     place(quality_, right - qualityWidth - 103, settingsY + 39, qualityWidth, 182);
     place(advanced_, right - 94, settingsY + 37, 94, 29);
@@ -896,15 +955,17 @@ void Window::layout() {
     const int sampleWidth = std::min(110, right - inner - 283 - (showExtract ? 103 : 0));
     place(sampleRate_, inner + 283, settingsY + 76, sampleWidth, 305);
     place(extract_, right - 94, settingsY + (showSettings ? 74 : 7), 94, 29);
-    const int hintX = showPrimary ? inner + 210 : inner;
-    place(hint_, hintX, settingsY + 81, right - hintX - (showExtract ? 103 : 0), 19);
+    const int hintX = showPrimary && !separateVideoHint ? inner + 210 : inner;
+    const int hintY = !showSettings ? 36 : separateVideoHint ? 108 : 81;
+    place(hint_, hintX, settingsY + hintY,
+          right - hintX - (showExtract && !separateVideoHint ? 103 : 0), 19);
     visible(source_, showSource);
     visible(presetLabel_, showSettings);
     visible(advanced_, showAdvanced);
-    visible(hint_, showSettings && hasHint);
+    visible(hint_, showSource && hasHint);
     visible(preset_, showSettings && !fixedFormat);
     for (HWND item : {qualityLabel_, quality_}) visible(item, showQuality);
-    visible(fixedPreset_, showSettings && fixedFormat);
+    for (HWND item : {pdfLayout_, pdfEditable_}) visible(item, showSettings && fixedFormat);
     for (HWND item : {resolutionLabel_, resolution_}) visible(item, showPrimary);
     for (HWND item : {sampleRateLabel_, sampleRate_}) visible(item, showSecondary);
     visible(extract_, showExtract);
@@ -1079,6 +1140,8 @@ void Window::refreshRow(TaskId id) {
         const auto& options = task.job.options;
         if (options.imageLongEdge) output += L" · " + std::to_wstring(options.imageLongEdge);
         else if (options.width || options.height) output += L" · 自定义";
+    } else if (preset && preset->kind == Kind::Pdf) {
+        output = task.job.options.pdfMode == ttk::EditableText ? L"Word · 可编辑文字" : L"Word · 保留原版式";
     }
     ListView_SetItemText(queue_, row, 1, const_cast<wchar_t*>(output.c_str()));
     ListView_SetItemText(queue_, row, 2, const_cast<wchar_t*>(task.status.c_str()));
@@ -1133,6 +1196,14 @@ void Window::syncSelection(bool allPresets) {
     }
     selectChoice(preset_, chosen);
     draftOptions_ = task ? task->job.options : ttk::Options{};
+    mixedPdfModes_ = target == Kind::Pdf && std::any_of(ids.begin(), ids.end(), [&](TaskId id) {
+        return tasks_.at(id).job.options.pdfMode != draftOptions_.pdfMode;
+    });
+    showText(presetLabel_, target == Kind::Pdf ? L"转换方式" : L"输出格式");
+    setCheck(pdfLayout_, target == Kind::Pdf && !mixedPdfModes_ &&
+                         draftOptions_.pdfMode == ttk::PreserveLayout);
+    setCheck(pdfEditable_, target == Kind::Pdf && !mixedPdfModes_ &&
+                           draftOptions_.pdfMode == ttk::EditableText);
     updateQualityChoices(target);
     updateInlineMenus();
     refreshButtons();
@@ -1152,7 +1223,8 @@ void Window::updateQualityChoices(Kind target) {
 
 void Window::updateInlineMenus() {
     const auto* preset = selectedPreset();
-    auto menus = preset ? inlineMenus(*preset, draftOptions_) : std::pair<OptionMenu, OptionMenu>{};
+    auto menus = preset && !mixedPdfModes_ ? inlineMenus(*preset, draftOptions_) :
+                                            std::pair<OptionMenu, OptionMenu>{};
     primaryOption_ = std::move(menus.first);
     secondaryOption_ = std::move(menus.second);
     const auto populate = [this](OptionMenu& menu, HWND caption, HWND combo) {
@@ -1188,25 +1260,36 @@ const ttk::Preset* Window::selectedPreset() const {
 void Window::refreshButtons() {
     const auto* currentPreset = selectedPreset();
     const Kind target = currentPreset ? currentPreset->kind : Kind::Unknown;
+    const auto ids = selection();
     const auto presetId = currentPreset ? currentPreset->id : std::wstring{};
     if (target == Kind::Pdf) {
-        showText(hint_, L"扫描页会自动识别简体中文和英语。");
-    } else if (target == Kind::Video) {
-        showText(hint_, draftOptions_.remux ? L"无损换封装保留原尺寸。" :
-            draftOptions_.quality == 3 || draftOptions_.quality == 5 ? L"画质和尺寸独立设置。" :
-            presetId.find(L"av1") != std::wstring::npos ? L"AV1 编码可能较慢。":
-            L"调整时保持画面比例。");
+        if (mixedPdfModes_) showText(hint_, L"请选择要应用的 Word 方式。");
+        else if (draftOptions_.pdfMode == ttk::EditableText) {
+            showText(hint_, L"文字可编辑，版式可能变化。");
+        } else {
+            showText(hint_, L"文字嵌在整页图片里，只能编辑整张图片。");
+        }
+    } else if (!ids.empty() && (target == Kind::Video || (!currentPreset && ids.size() == 1))) {
+        auto dimensions = describeVideoOutput(tasks_.at(ids.front()));
+        const bool same = std::all_of(ids.begin() + 1, ids.end(), [&](TaskId id) {
+            return describeVideoOutput(tasks_.at(id)) == dimensions;
+        });
+        if (!same) dimensions = L"请单独选中文件查看预计尺寸。";
+        showText(hint_, dimensions);
     } else if (target == Kind::Image) {
         showText(hint_, presetId == L"ico" ? L"图标使用正方形画布。" : L"调整时保持图片比例。");
     } else {
-        showText(hint_, selection().size() > 1 && currentPreset ?
+        showText(hint_, ids.size() > 1 && currentPreset ?
                  L"更改将应用到选中的同类任务。" : L"");
     }
     EnableWindow(preset_, currentPreset != nullptr);
     EnableWindow(quality_, currentPreset && permitsQuality(*currentPreset));
     EnableWindow(resolution_, primaryOption_.member != nullptr);
     EnableWindow(sampleRate_, secondaryOption_.member != nullptr);
-    EnableWindow(advanced_, currentPreset && permitsAdvanced(*currentPreset));
+    EnableWindow(advanced_, currentPreset && !mixedPdfModes_ &&
+                            permitsAdvanced(*currentPreset, draftOptions_));
+    EnableWindow(pdfLayout_, target == Kind::Pdf);
+    EnableWindow(pdfEditable_, target == Kind::Pdf);
     const bool batchActive = !scheduled_.empty() || (active_ && !probing_);
     const auto ready = std::count_if(tasks_.begin(), tasks_.end(), [](const auto& entry) {
         return entry.second.phase == Phase::Ready;
@@ -1359,7 +1442,7 @@ void Window::applySettings(SettingChange change) {
             options.quality = qualities[static_cast<std::size_t>(quality)].value;
             break;
         case SettingChange::Advanced: {
-            if (!permitsAdvanced(*previous)) continue;
+            if (!permitsAdvanced(*previous, options)) continue;
             auto changed = draftOptions_;
             changed.quality = options.quality;
             changed.resolution = preset->kind == Kind::Video &&
@@ -1367,6 +1450,8 @@ void Window::applySettings(SettingChange change) {
             changed.imageLongEdge = preset->kind == Kind::Image &&
                 !changed.width && !changed.height ? options.imageLongEdge : 0;
             changed.audioSampleRate = changed.remux ? 0 : options.audioSampleRate;
+            changed.pdfMode = options.pdfMode;
+            changed.pdfPageDpi = options.pdfPageDpi;
             changed.ocrDpi = options.ocrDpi;
             if (preset->kind == Kind::Audio) {
                 if (!ttk::hasAdjustableAudioBitrate(previous->id)) changed.audioKbps = 0;
@@ -1386,6 +1471,19 @@ void Window::applySettings(SettingChange change) {
     if (change != SettingChange::Quality) updateInlineMenus();
     refreshButtons();
     layout();
+}
+
+void Window::applyPdfMode(ttk::PdfMode mode) {
+    const auto* preset = selectedPreset();
+    if (!preset || preset->kind != Kind::Pdf) return;
+    for (TaskId id : selection()) {
+        auto& task = tasks_.at(id);
+        if (editable(task) && outputKind(task) == Kind::Pdf) {
+            task.job.options.pdfMode = mode;
+            refreshRow(id);
+        }
+    }
+    syncSelection();
 }
 
 void Window::applyInlineOption(const OptionMenu& menu, HWND combo) {
@@ -1458,7 +1556,7 @@ void Window::toggleAudioOutput() {
 
 void Window::editAdvanced(bool focusSize) {
     const auto* preset = selectedPreset();
-    if (!preset || !permitsAdvanced(*preset)) return;
+    if (!preset || mixedPdfModes_ || !permitsAdvanced(*preset, draftOptions_)) return;
     const auto editing = selection();
     const bool audioBitrate = preset->kind != Kind::Audio || ttk::hasAdjustableAudioBitrate(preset->id);
     AdvancedDraft draft{preset->kind, draftOptions_, focusSize, audioBitrate, preset->id};
@@ -1682,6 +1780,16 @@ void Window::startWork() {
                             progress_ = percent;
                             progressText_ = description;
                         });
+                    const auto* preset = findPreset(job.preset);
+                    if (completion.conversion.ok && preset && preset->kind == Kind::Video &&
+                        !cancel_.load()) {
+                        try {
+                            const auto info = ttk::probeMedia(completion.conversion.output, cancel_);
+                            completion.outputGeometry = videoGeometry(info);
+                        } catch (const std::exception&) {
+                            // Conversion remains successful if optional output metadata is unavailable.
+                        }
+                    }
                 }
             } catch (const std::exception& error) {
                 completion.source.detail = L"无法检查此文件";
@@ -1737,6 +1845,7 @@ void Window::finishWork() {
         }
     } else {
         task.result = std::move(completion->conversion);
+        task.outputGeometry = completion->outputGeometry;
         if (task.result.cancelled) {
             task.phase = Phase::Cancelled;
             task.status = L"已取消";
@@ -1847,7 +1956,11 @@ void Window::showDetails() {
     if (ids.empty()) return;
     const auto& task = tasks_.at(ids.front());
     std::wstring message = task.job.input.native() + L"\n\n" + task.status;
-    if (!task.source.detail.empty() && task.source.detail != task.result.message) {
+    if (task.source.kind == Kind::Video) {
+        message += L"\n" + describeSource(task);
+        const auto dimensions = describeVideoOutput(task);
+        if (!dimensions.empty()) message += L"\n" + dimensions;
+    } else if (!task.source.detail.empty() && task.source.detail != task.result.message) {
         message += L"\n" + task.source.detail;
     }
     if (!task.result.message.empty()) message += L"\n\n" + task.result.message;
@@ -1922,6 +2035,8 @@ void Window::command(int id, int code) {
     case Quality: if (code == CBN_SELCHANGE) applySettings(SettingChange::Quality); break;
     case Resolution: if (code == CBN_SELCHANGE) applyInlineOption(primaryOption_, resolution_); break;
     case SampleRate: if (code == CBN_SELCHANGE) applyInlineOption(secondaryOption_, sampleRate_); break;
+    case PdfLayout: if (code == BN_CLICKED) applyPdfMode(ttk::PreserveLayout); break;
+    case PdfEditable: if (code == BN_CLICKED) applyPdfMode(ttk::EditableText); break;
     case ExtractAudio: toggleAudioOutput(); break;
     case Advanced: editAdvanced(); break;
     case Browse: pickDirectory(); break;

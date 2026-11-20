@@ -1,4 +1,5 @@
 #include "ttk.hpp"
+#include "pdf_layout.hpp"
 
 #include <windows.h>
 
@@ -20,6 +21,7 @@ namespace {
 constexpr size_t maxTextBytes = 32 * 1024 * 1024;
 constexpr size_t maxXmlBytes = 64 * 1024 * 1024;
 constexpr uint64_t maxRasterPixels = 16000000;
+constexpr uint64_t maxDocxBytes = 2ULL * 1024 * 1024 * 1024;
 
 struct Cell {
     int left;
@@ -325,7 +327,7 @@ Rows ocrRows(std::vector<Word> words, int& columnTolerance) {
     return rows;
 }
 
-uint32_t crc32(std::string_view bytes) {
+uint32_t updateCrc(uint32_t crc, std::string_view bytes) {
     static const auto table = [] {
         std::array<uint32_t, 256> entries{};
         for (uint32_t value = 0; value < entries.size(); ++value) {
@@ -335,9 +337,8 @@ uint32_t crc32(std::string_view bytes) {
         }
         return entries;
     }();
-    uint32_t crc = 0xFFFFFFFFU;
     for (unsigned char byte : bytes) crc = (crc >> 8) ^ table[(crc ^ byte) & 0xFF];
-    return crc ^ 0xFFFFFFFFU;
+    return crc;
 }
 
 void write16(std::ostream& stream, uint16_t value) {
@@ -351,8 +352,8 @@ void write32(std::ostream& stream, uint32_t value) {
 }
 
 struct ZipEntry {
-    std::string_view name;
-    std::string_view bytes;
+    std::string name;
+    uint32_t size = 0;
     uint32_t offset = 0;
     uint32_t crc = 0;
 };
@@ -364,55 +365,123 @@ void writeZipMetadata(std::ostream& output, const ZipEntry& entry) {
     write16(output, 0);  // DOS time.
     write16(output, 33); // 1980-01-01 in DOS date format.
     write32(output, entry.crc);
-    write32(output, static_cast<uint32_t>(entry.bytes.size()));
-    write32(output, static_cast<uint32_t>(entry.bytes.size()));
+    write32(output, entry.size);
+    write32(output, entry.size);
     write16(output, static_cast<uint16_t>(entry.name.size()));
     write16(output, 0); // Extra field length.
 }
 
-void writeDocx(const fs::path& outputPath, std::string_view document, const Cancel& cancel) {
-    constexpr std::string_view types =
-        R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>)";
-    constexpr std::string_view relationships =
-        R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>)";
-    std::array<ZipEntry, 3> entries{{
-        {"[Content_Types].xml", types}, {"_rels/.rels", relationships}, {"word/document.xml", document}
-    }};
-    std::ofstream stream(outputPath, std::ios::binary | std::ios::trunc);
-    if (!stream) throw PdfError{L"无法创建 Word 文件。", outputPath.wstring()};
-    for (auto& entry : entries) {
-        checkCancelled(cancel);
-        entry.offset = static_cast<uint32_t>(stream.tellp());
-        entry.crc = crc32(entry.bytes);
-        write32(stream, 0x04034B50);
-        writeZipMetadata(stream, entry);
-        stream.write(entry.name.data(), static_cast<std::streamsize>(entry.name.size()));
-        stream.write(entry.bytes.data(), static_cast<std::streamsize>(entry.bytes.size()));
+class DocxPackage {
+public:
+    DocxPackage(const fs::path& path, const Cancel& cancel)
+        : stream_(path, std::ios::binary | std::ios::trunc), path_(path), cancel_(cancel) {
+        if (!stream_) throw PdfError{L"无法创建 Word 文件。", path_.wstring()};
     }
-    const auto directory = static_cast<uint32_t>(stream.tellp());
-    for (const auto& entry : entries) {
-        write32(stream, 0x02014B50);
-        write16(stream, 20); // DOS creator, ZIP version 2.0.
-        writeZipMetadata(stream, entry);
-        write16(stream, 0); // Comment length.
-        write16(stream, 0); // Disk number.
-        write16(stream, 0); // Internal attributes.
-        write32(stream, 0); // External attributes.
-        write32(stream, entry.offset);
-        stream.write(entry.name.data(), static_cast<std::streamsize>(entry.name.size()));
+
+    void addXml(const std::string& name, std::string_view content) {
+        const auto crc = updateCrc(0xFFFFFFFFU, content) ^ 0xFFFFFFFFU;
+        beginEntry(name, content.size(), crc);
+        stream_.write(content.data(), static_cast<std::streamsize>(content.size()));
+        position();
     }
-    const auto directorySize = static_cast<uint32_t>(stream.tellp()) - directory;
-    write32(stream, 0x06054B50);
-    write16(stream, 0);
-    write16(stream, 0);
-    write16(stream, static_cast<uint16_t>(entries.size()));
-    write16(stream, static_cast<uint16_t>(entries.size()));
-    write32(stream, directorySize);
-    write32(stream, directory);
-    write16(stream, 0);
-    stream.close();
-    if (!stream) throw PdfError{L"写入 Word 文件时出错。", outputPath.wstring()};
-}
+
+    void addPng(const std::string& name, const fs::path& path) {
+        std::ifstream image(path, std::ios::binary | std::ios::ate);
+        const auto size = image.tellg();
+        if (!image || size < 24 || size > static_cast<std::streamoff>(64 * 1024 * 1024)) {
+            throw PdfError{L"无法读取渲染后的 PDF 页面。", path.wstring()};
+        }
+        image.seekg(0);
+        std::array<char, 65536> block{};
+        auto crc = 0xFFFFFFFFU;
+        const auto offset = beginEntry(name, static_cast<uint64_t>(size), 0);
+        for (auto remaining = static_cast<uint64_t>(size); remaining;) {
+            checkCancelled(cancel_);
+            const auto length = static_cast<std::streamsize>(
+                (std::min)(remaining, static_cast<uint64_t>(block.size())));
+            if (!image.read(block.data(), length)) {
+                throw PdfError{L"读取渲染后的 PDF 页面时出错。", path.wstring()};
+            }
+            crc = updateCrc(crc, {block.data(), static_cast<size_t>(length)});
+            stream_.write(block.data(), length);
+            remaining -= static_cast<uint64_t>(length);
+        }
+        const auto end = position();
+        entries_.back().crc = crc ^ 0xFFFFFFFFU;
+        stream_.seekp(offset + 14); // Update the CRC in the local ZIP header.
+        write32(stream_, entries_.back().crc);
+        stream_.seekp(end);
+        position();
+    }
+
+    void finish(std::string_view document, std::string_view documentRelationships = {}) {
+        constexpr std::string_view relationships =
+            R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>)";
+        std::string types =
+            R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>)";
+        if (!documentRelationships.empty()) {
+            types += R"(<Default Extension="png" ContentType="image/png"/>)";
+            addXml("word/_rels/document.xml.rels", documentRelationships);
+        }
+        types += R"(<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>)";
+        addXml("[Content_Types].xml", types);
+        addXml("_rels/.rels", relationships);
+        addXml("word/document.xml", document);
+
+        const auto directory = position();
+        for (const auto& entry : entries_) {
+            checkCancelled(cancel_);
+            write32(stream_, 0x02014B50);
+            write16(stream_, 20); // DOS creator, ZIP version 2.0.
+            writeZipMetadata(stream_, entry);
+            write16(stream_, 0); // Comment length.
+            write16(stream_, 0); // Disk number.
+            write16(stream_, 0); // Internal attributes.
+            write32(stream_, 0); // External attributes.
+            write32(stream_, entry.offset);
+            stream_.write(entry.name.data(), static_cast<std::streamsize>(entry.name.size()));
+        }
+        const auto directorySize = position() - directory;
+        write32(stream_, 0x06054B50);
+        write16(stream_, 0);
+        write16(stream_, 0);
+        write16(stream_, static_cast<uint16_t>(entries_.size()));
+        write16(stream_, static_cast<uint16_t>(entries_.size()));
+        write32(stream_, directorySize);
+        write32(stream_, directory);
+        write16(stream_, 0);
+        stream_.close();
+        if (!stream_) throw PdfError{L"写入 Word 文件时出错。", path_.wstring()};
+    }
+
+private:
+    uint32_t position() {
+        const auto position = stream_.tellp();
+        if (position < 0) throw PdfError{L"写入 Word 文件时出错。", path_.wstring()};
+        if (static_cast<uint64_t>(position) > maxDocxBytes) tooLarge();
+        return static_cast<uint32_t>(position);
+    }
+
+    [[noreturn]] void tooLarge() const {
+        throw PdfError{L"Word 文件超出处理上限。请降低页面清晰度或拆分 PDF 后再转换。", path_.wstring()};
+    }
+
+    uint32_t beginEntry(const std::string& name, uint64_t size, uint32_t crc) {
+        checkCancelled(cancel_);
+        const auto offset = position();
+        if (size + offset + 30 + name.size() > maxDocxBytes || entries_.size() >= 65534) tooLarge();
+        entries_.push_back({name, static_cast<uint32_t>(size), offset, crc});
+        write32(stream_, 0x04034B50);
+        writeZipMetadata(stream_, entries_.back());
+        stream_.write(name.data(), static_cast<std::streamsize>(name.size()));
+        return offset;
+    }
+
+    std::ofstream stream_;
+    fs::path path_;
+    const Cancel& cancel_;
+    std::vector<ZipEntry> entries_;
+};
 
 DWORD CALLBACK copyProgress(LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER,
                             DWORD, DWORD, HANDLE, HANDLE, LPVOID token) {
@@ -477,7 +546,12 @@ int countPages(std::string_view info) {
     throw PdfError{L"无法读取 PDF 页数。", {}};
 }
 
-int rasterDpi(std::string_view info, int requestedDpi) {
+struct PageSize {
+    double width;
+    double height;
+};
+
+PageSize pageSize(std::string_view info) {
     for (const auto line : split(info, '\n')) {
         const auto sizePosition = line.find("size:");
         if (line.substr(0, 4) != "Page" || sizePosition == std::string_view::npos) continue;
@@ -488,13 +562,24 @@ int rasterDpi(std::string_view info, int requestedDpi) {
         char separator = 0;
         if (!(values >> width >> separator >> height) || separator != 'x' ||
             !std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0) continue;
-        const double bounded = (std::min)({static_cast<double>(requestedDpi),
-                                           72 * std::sqrt(maxRasterPixels / (width * height)),
-                                           72 * 12000 / width, 72 * 12000 / height});
-        if (bounded >= 30.0) return static_cast<int>(bounded);
-        throw PdfError{L"扫描页尺寸超出 OCR 处理范围。", {}};
+        const auto rotation = line.find("(rotated ");
+        if (rotation != std::string_view::npos) {
+            const auto degrees = line.substr(rotation + 9);
+            if (degrees.substr(0, 3) == "90 " || degrees.substr(0, 4) == "270 ") {
+                std::swap(width, height);
+            }
+        }
+        return {width, height};
     }
-    throw PdfError{L"无法读取扫描页尺寸。", {}};
+    throw PdfError{L"无法读取 PDF 页面尺寸。", {}};
+}
+
+int rasterDpi(PageSize size, int requestedDpi) {
+    const double bounded = (std::min)({static_cast<double>(requestedDpi),
+                                      72 * std::sqrt(maxRasterPixels / (size.width * size.height)),
+                                      72 * 12000 / size.width, 72 * 12000 / size.height});
+    if (bounded >= 30.0) return static_cast<int>(bounded);
+    throw PdfError{L"PDF 页面尺寸超出渲染范围。", {}};
 }
 
 void stageOcr(const fs::path& tesseract, const fs::path& scratch, const Cancel& cancel) {
@@ -514,16 +599,99 @@ std::wstring pageImage(int page) {
     return L"page-" + number + L".png";
 }
 
+PageSize readPageSize(int page, const fs::path& scratch, const Cancel& cancel) {
+    const auto number = std::to_wstring(page);
+    return pageSize(runEngine(enginePath(L"pdfinfo.exe"),
+        {L"-cfg", L"xpdfrc", L"-f", number, L"-l", number, L"input.pdf"},
+        scratch, cancel, L"无法读取 PDF 页面。"));
+}
+
+void renderPage(int page, int dpi, const fs::path& scratch, const Cancel& cancel, bool grayscale) {
+    const auto number = std::to_wstring(page);
+    std::vector<std::wstring> arguments{
+        L"-cfg", L"xpdfrc", L"-f", number, L"-l", number, L"-r", std::to_wstring(dpi)};
+    if (grayscale) arguments.push_back(L"-gray");
+    else arguments.insert(arguments.end(), {L"-aa", L"yes", L"-aaVector", L"yes"});
+    arguments.insert(arguments.end(), {L"input.pdf", L"page"});
+    runEngine(enginePath(L"pdftopng.exe"), arguments, scratch, cancel, L"无法渲染 PDF 页面。");
+}
+
+void appendImageSection(std::string& xml, int width, int height, bool last) {
+    xml += R"(<w:sectPr>)";
+    if (!last) xml += R"(<w:type w:val="nextPage"/>)";
+    xml += R"(<w:pgSz w:w=")" + std::to_string(width) + R"(" w:h=")" + std::to_string(height) + '"';
+    if (width > height) xml += R"( w:orient="landscape")";
+    xml += R"(/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>)";
+}
+
+void appendImagePage(std::string& xml, PageSize size, const std::string& number, bool last) {
+    // Word caps each page edge at 22 inches. Scale oversized pages uniformly.
+    const auto scale = (std::min)({20.0, 31680.0 / size.width, 31680.0 / size.height});
+    const auto width = (std::max)(1, static_cast<int>(std::lround(size.width * scale)));
+    const auto height = (std::max)(1, static_cast<int>(std::lround(size.height * scale)));
+    const auto extent = R"( cx=")" + std::to_string(width * 635) + R"(" cy=")" + std::to_string(height * 635) + '"';
+    const auto name = "PDF " + number;
+    xml += R"(<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>)";
+    if (!last) appendImageSection(xml, width, height, last);
+    xml += R"(</w:pPr><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="0" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent)";
+    xml += extent + R"(/><wp:wrapNone/><wp:docPr id=")" + number + R"(" name=")" + name;
+    xml += R"("/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id=")" + number + R"(" name=")" + name;
+    xml += R"("/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId)" + number;
+    xml += R"("/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext)";
+    xml += extent + R"(/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>)";
+    if (last) appendImageSection(xml, width, height, last);
+}
+
+Result preserveLayout(const Job& job, int pages, const fs::path& temporaryOutput,
+                      const fs::path& scratch, const Cancel& cancel, const Progress& progress) {
+    const int dpi = job.options.pdfPageDpi;
+    if (dpi != 150 && dpi != 200 && dpi != 300 && dpi != 400) {
+        throw PdfError{L"页面清晰度请选择 150、200、300 或 400 DPI。", {}};
+    }
+    if (job.options.forceOcr) {
+        throw PdfError{L"强制 OCR 仅适用于可编辑文字模式。", {}};
+    }
+    if (pages > 65000) {
+        throw PdfError{L"PDF 页数超出处理上限。请拆分后再转换。", {}};
+    }
+    std::string xml =
+        R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>)";
+    std::string relationships =
+        R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">)";
+    DocxPackage package(temporaryOutput, cancel);
+    bool boundedDpi = false;
+    for (int page = 1; page <= pages; ++page) {
+        checkCancelled(cancel);
+        if (progress) progress(static_cast<int>(static_cast<int64_t>(page - 1) * 95 / pages),
+            L"正在保留原版式 " + std::to_wstring(page) + L"/" + std::to_wstring(pages));
+        const auto size = readPageSize(page, scratch, cancel);
+        const auto effectiveDpi = rasterDpi(size, dpi);
+        boundedDpi = boundedDpi || effectiveDpi < dpi;
+        renderPage(page, effectiveDpi, scratch, cancel, false);
+        const auto path = scratch / pageImage(page);
+        const auto number = std::to_string(page);
+        const auto media = "media/page-" + number + ".png";
+        package.addPng("word/" + media, path);
+        fs::remove(path);
+        appendImagePage(xml, size, number, page == pages);
+        relationships += R"(<Relationship Id="rId)" + number +
+            R"(" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target=")" + media + R"("/>)";
+        if (xml.size() > maxXmlBytes) throw PdfError{L"转换结果超过当前 Word 文件处理上限。", {}};
+    }
+    xml += "</w:body></w:document>";
+    relationships += "</Relationships>";
+    if (progress) progress(96, L"正在写入保留原版式的 Word 文件");
+    package.finish(xml, relationships);
+    checkCancelled(cancel);
+    std::wstring message = L"已按原版式生成 Word 文件。";
+    if (boundedDpi) message += L" 大尺寸页面已按安全上限降低渲染分辨率。";
+    return {true, false, std::move(message), {}, temporaryOutput};
+}
+
 bool appendRecognizedPage(std::string& xml, int page, int requestedDpi, const fs::path& tesseract,
                           const fs::path& scratch, const Cancel& cancel) {
-    const auto pageNumber = std::to_wstring(page);
-    const auto info = runEngine(enginePath(L"pdfinfo.exe"),
-        {L"-cfg", L"xpdfrc", L"-f", pageNumber, L"-l", pageNumber, L"input.pdf"},
-        scratch, cancel, L"无法读取 PDF 页面。");
-    const auto dpi = std::to_wstring(rasterDpi(info, requestedDpi));
-    runEngine(enginePath(L"pdftopng.exe"),
-        {L"-cfg", L"xpdfrc", L"-f", pageNumber, L"-l", pageNumber, L"-r", dpi, L"-gray", L"input.pdf", L"page"},
-        scratch, cancel, L"无法渲染扫描页。");
+    const auto dpi = rasterDpi(readPageSize(page, scratch, cancel), requestedDpi);
+    renderPage(page, dpi, scratch, cancel, true);
     const auto image = pageImage(page);
     runEngine(tesseract,
         {image, L"recognized", L"--tessdata-dir", L"tessdata", L"-l", L"chi_sim+eng", L"--oem", L"1", L"--psm", L"3",
@@ -551,11 +719,17 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
         stageConfig(scratch, cancel);
         const int pages = countPages(runEngine(enginePath(L"pdfinfo.exe"),
             {L"-cfg", L"xpdfrc", L"input.pdf"}, scratch, cancel, L"无法打开 PDF，文件可能损坏或受密码保护。"));
+        if (job.options.pdfMode == PreserveLayout) {
+            return preserveLayout(job, pages, temporaryOutput, scratch, cancel, progress);
+        }
+        if (job.options.pdfMode != EditableText) throw PdfError{L"无效的 PDF 转换模式。", {}};
 
         std::string text;
         std::string layout;
+        std::string geometry;
         std::vector<std::string_view> textPages;
         std::vector<std::string_view> layoutPages;
+        std::vector<std::string_view> geometryPages;
         if (!job.options.forceOcr) {
             const auto extractor = enginePath(L"pdftotext.exe");
             runEngine(extractor, {L"-cfg", L"xpdfrc", L"-enc", L"UTF-8", L"-eol", L"unix", L"input.pdf", L"text.txt"},
@@ -567,6 +741,14 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
                           scratch, cancel, L"无法分析 PDF 表格布局。");
                 layout = readText(scratch / L"layout.txt");
                 layoutPages = splitPages(layout, static_cast<size_t>(pages));
+                try {
+                    runEngine(extractor, {L"-ttk-layout", L"-cfg", L"xpdfrc", L"-enc", L"UTF-8",
+                        L"input.pdf", L"geometry.tsv"}, scratch, cancel, L"无法读取 PDF 版面坐标。");
+                    geometry = readText(scratch / L"geometry.tsv");
+                    geometryPages = splitPages(geometry, static_cast<size_t>(pages));
+                } catch (const PdfError&) {
+                    // The ordinary text and table path also works with older PDF engines.
+                }
             }
         }
 
@@ -586,7 +768,10 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
                                     status + std::to_wstring(page) + L"/" + std::to_wstring(pages));
             if (embedded) {
                 const auto p = static_cast<size_t>(index);
-                if (layoutPages.empty() || !appendRows(xml, layoutRows(layoutPages[p]), 2)) {
+                const auto physical = layoutPages.empty() ? std::string_view{} : layoutPages[p];
+                const auto coordinates = geometryPages.empty() ? std::string_view{} : geometryPages[p];
+                if (!pdf_layout::appendEditablePage(xml, textPages[p], physical, coordinates) &&
+                    (physical.empty() || !appendRows(xml, layoutRows(physical), 2))) {
                     appendParagraphs(xml, textPages[p]);
                 }
                 ++textPagesCount;
@@ -612,7 +797,7 @@ Result convertPdf(const Job& job, const fs::path& temporaryOutput, const fs::pat
         }
         xml += R"(<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>)";
         if (progress) progress(96, L"正在写入可编辑 Word 文件");
-        writeDocx(temporaryOutput, xml, cancel);
+        DocxPackage{temporaryOutput, cancel}.finish(xml);
         checkCancelled(cancel);
         std::wstring message = L"已生成可编辑的 Word 文件。";
         if (unrecognizedPages > 0) message += L" 有 " + std::to_wstring(unrecognizedPages) + L" 页未识别到文字。";

@@ -264,7 +264,7 @@ ProcessResult runProcess(const fs::path& exe, const std::vector<std::wstring>& a
 const std::vector<Preset>& presets() {
     static const auto list = [] {
         auto entries = mediaPresets();
-        entries.push_back({L"pdf-docx", Kind::Pdf, L"Word（DOCX） · 可编辑", L".docx"});
+        entries.push_back({L"pdf-docx", Kind::Pdf, L"Word（DOCX）", L".docx"});
         return entries;
     }();
     return list;
@@ -366,12 +366,16 @@ int runHeadless(const std::vector<std::wstring>& arguments) {
             writeOutput(L"audio_codec\t" + info.audioCodec);
             writeOutput(L"width\t" + std::to_wstring(info.width));
             writeOutput(L"height\t" + std::to_wstring(info.height));
+            const auto aspect = info.aspectNumerator > 0 && info.aspectDenominator > 0
+                ? std::to_wstring(info.aspectNumerator) + L":" + std::to_wstring(info.aspectDenominator) : std::wstring{};
+            writeOutput(L"display_aspect_ratio\t" + aspect);
             writeOutput(std::wstring{L"has_audio\t"} + (info.hasAudio ? L"1" : L"0"));
         }
         return info.kind == Kind::Unknown ? 1 : 0;
     }
     if (arguments.size() >= 4 && arguments.front() == L"--convert") {
         Job job{arguments[2], arguments[3], arguments[1], {}};
+        job.options.pdfMode = EditableText; // Keep the existing headless PDF conversion default.
         bool cancelOnProgress = false;
         for (std::size_t index = 4; index < arguments.size(); ++index) {
             if (arguments[index] == L"--remux") job.options.remux = true;
@@ -379,7 +383,15 @@ int runHeadless(const std::vector<std::wstring>& arguments) {
             else if (arguments[index] == L"--fast") job.options.quality = 0;
             else if (arguments[index] == L"--hardware") job.options.hardware = true;
             else if (arguments[index] == L"--cancel-on-progress") cancelOnProgress = true;
-            else if (arguments[index] == L"--quality" && index + 1 < arguments.size()) {
+            else if (arguments[index] == L"--pdf-mode" && index + 1 < arguments.size()) {
+                const auto& mode = arguments[++index];
+                if (mode == L"layout") job.options.pdfMode = PreserveLayout;
+                else if (mode == L"editable") job.options.pdfMode = EditableText;
+                else {
+                    writeOutput(L"PDF 模式请选择 layout 或 editable。", STD_ERROR_HANDLE);
+                    return 2;
+                }
+            } else if (arguments[index] == L"--quality" && index + 1 < arguments.size()) {
                 constexpr std::array<std::wstring_view, 6> qualities{
                     L"fast", L"balanced", L"smaller", L"low", L"high", L"very-low"};
                 const std::wstring_view name = arguments[++index];
@@ -405,10 +417,11 @@ int runHeadless(const std::vector<std::wstring>& arguments) {
                     int Options::*field;
                     long maximum;
                 };
-                constexpr std::array<NumericSetting, 4> settings{{
+                constexpr std::array<NumericSetting, 5> settings{{
                     {L"--image-size", &Options::imageLongEdge, 16384},
                     {L"--audio-bitrate", &Options::audioKbps, 8192},
                     {L"--sample-rate", &Options::audioSampleRate, 192000},
+                    {L"--page-dpi", &Options::pdfPageDpi, 400},
                     {L"--ocr-dpi", &Options::ocrDpi, 400},
                 }};
                 const auto& flag = arguments[index];

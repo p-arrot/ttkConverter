@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import zipfile
@@ -40,7 +41,7 @@ def run(*args, timeout=120):
 
 def make_fixtures(directory, ffmpeg):
     from PIL import Image, ImageDraw, ImageFont
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -93,6 +94,20 @@ def make_fixtures(directory, ffmpeg):
     pdf.drawImage(ImageReader(scan), 35, 560, width=525, height=205)
     pdf.save()
 
+    pdf = canvas.Canvas(str(directory / "版式样本.pdf"), pagesize=A4)
+    pdf.setFont("Helvetica-Bold", 22)
+    pdf.setFillColorRGB(.14, .31, .52)
+    pdf.drawCentredString(A4[0] / 2, 760, "Centered PDF Title")
+    pdf.setFillColorRGB(0, 0, 0)
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(50, 710, "This first paragraph has an editable text layer.")
+    pdf.setFont("Helvetica-Oblique", 12)
+    pdf.drawString(50, 670, "An italic line follows with a visible paragraph gap.")
+    pdf.showPage()
+    pdf.setPageSize(landscape(A4))
+    pdf.drawImage(ImageReader(scan), 35, 300, width=525, height=205)
+    pdf.save()
+
 
 def streams(probe, path):
     return json.loads(run(probe, "-v", "error", "-show_streams", "-of", "json", path))["streams"]
@@ -115,11 +130,51 @@ def read_docx(path):
         return "\n".join(node.text for node in body.iter(W + "t") if node.text), body
 
 
+def check_pdf_layout(app, source, output, *, landscape_second=False):
+    path = convert(app, "pdf-docx", source, output, "--pdf-mode", "layout", "--page-dpi", "150")
+    _, body = read_docx(path)
+    wp = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+    assert len(list(body.iter(wp + "anchor"))) == 2
+    sections = [section.find(W + "pgSz") for section in body.iter(W + "sectPr")]
+    assert len(sections) == 2
+    page_sizes = [(int(size.get(W + "w")), int(size.get(W + "h"))) for size in sections]
+    assert page_sizes == [(11906, 16838), (16838, 11906) if landscape_second else (11906, 16838)]
+    with zipfile.ZipFile(path) as package:
+        for page in (1, 2):
+            png = package.read(f"word/media/page-{page}.png")
+            assert png.startswith(b"\x89PNG\r\n\x1a\n")
+            width, height = struct.unpack(">II", png[16:24])
+            if page == 2 and landscape_second:
+                width, height = height, width
+            assert (width, height) in ((1240, 1754), (1241, 1754)), (width, height)
+    cancel_output = output / "取消保留版式"
+    cancelled = subprocess.run(
+        [str(app), "--convert", "pdf-docx", str(source), str(cancel_output), "--pdf-mode",
+         "layout", "--cancel-on-progress"], capture_output=True, timeout=120,
+    )
+    assert cancelled.returncode == 130 and not (
+        cancel_output.exists() and any(cancel_output.iterdir())
+    ), cancelled.stderr
+    print("PASS original PDF layout uses one full-page image per PDF page", flush=True)
+
+
+def check_editable_layout(app, source, output):
+    path = convert(app, "pdf-docx", source, output, "--pdf-mode", "editable")
+    _, body = read_docx(path)
+    title = next(paragraph for paragraph in body.iter(W + "p")
+                 if "Centered PDF Title" in "".join(t.text or "" for t in paragraph.iter(W + "t")))
+    assert title.find(f"{W}pPr/{W}jc").get(W + "val") == "center"
+    assert title.find(f".//{W}rPr/{W}b") is not None
+    assert title.find(f".//{W}rPr/{W}sz").get(W + "val") == "44"
+    assert body.find(f".//{W}rPr/{W}i") is not None
+    print("PASS editable PDF layout retains centered heading, sizing, bold and italics", flush=True)
+
+
 def check_video_settings(app, probe, source, directory):
     details = dict(line.split("\t", 1) for line in run(app, "--probe", source, "--details").splitlines()[1:])
     assert details == {
         "container": "MP4", "video_codec": "H.264", "audio_codec": "AAC",
-        "width": "320", "height": "240", "has_audio": "1",
+        "width": "320", "height": "240", "display_aspect_ratio": "4:3", "has_audio": "1",
     }, details
     print("PASS source container, codecs and dimensions", flush=True)
 
@@ -130,6 +185,7 @@ def check_video_settings(app, probe, source, directory):
     for path, expected in ((original, (320, 240)), (resized, (1440, 1080)), (reduced, (192, 144))):
         stream = next(s for s in streams(probe, path) if s["codec_type"] == "video")
         assert (stream["width"], stream["height"]) == expected, stream
+        assert stream["display_aspect_ratio"] == "4:3", stream
 
     ffmpeg = probe.with_name("ffmpeg.exe")
     for name, filter_graph, resolution, expected in (
@@ -266,6 +322,12 @@ def smoke(app, directory, fixtures, exhaustive):
     text, _ = read_docx(convert(app, "pdf-docx", fixtures / "混合页面.pdf", output))
     assert "Embedded Text" in text and "ORANGE" in text, text
     print("PASS PDF text, table, bilingual OCR and mixed pages", flush=True)
+    layout_fixture = fixtures / "版式样本.pdf"
+    if layout_fixture.is_file():
+        check_pdf_layout(app, layout_fixture, output, landscape_second=True)
+        check_editable_layout(app, layout_fixture, output)
+    else:
+        check_pdf_layout(app, fixtures / "混合页面.pdf", output)
     cancelled = subprocess.run(
         [str(app), "--convert", "mp4-av1", str(video), str(directory / "取消测试"), "--cancel-on-progress"],
         capture_output=True, timeout=120,

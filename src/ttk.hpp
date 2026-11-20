@@ -13,6 +13,7 @@ using Cancel = std::atomic_bool;
 using Progress = std::function<void(int, const std::wstring&)>; // -1, or 0–100
 
 enum class Kind { Video, Audio, Image, Pdf, Unknown };
+enum PdfMode { PreserveLayout = 0, EditableText = 1 };
 
 struct Preset {
     std::wstring id;
@@ -31,6 +32,16 @@ struct SourceInfo {
     int width = 0;
     int height = 0;
     bool hasAudio = false;
+    long long aspectNumerator = 0;
+    long long aspectDenominator = 0;
+    bool hasSampleAspect = false;
+};
+
+struct VideoGeometry {
+    int width = 0;
+    int height = 0;
+    long long aspectNumerator = 0;
+    long long aspectDenominator = 0;
 };
 
 struct Options {
@@ -47,6 +58,8 @@ struct Options {
     int resolution = 0; // Nominal short edge in pixels. Zero keeps the input size.
     int imageLongEdge = 0; // Zero keeps the input size, with a maximum of 256 for ICO.
     int audioSampleRate = 0; // Hertz. Zero lets the encoder select the rate.
+    int pdfMode = PreserveLayout;
+    int pdfPageDpi = 200;
     int ocrDpi = 300;
 };
 
@@ -87,6 +100,7 @@ std::vector<int> audioSampleRates(const std::wstring& preset);
 bool supportsAudioBitrate(const std::wstring& preset, int sampleRate, int bitrate);
 std::vector<int> audioBitrates(const std::wstring& preset, int sampleRate);
 SourceInfo probeMedia(const fs::path& input, const Cancel& cancel);
+VideoGeometry predictVideoGeometry(const SourceInfo& source, const Options& options);
 Result convertMedia(const Job& job, const fs::path& temporaryOutput,
                     const fs::path& scratch, const Cancel& cancel, const Progress& progress);
 Result convertPdf(const Job& job, const fs::path& temporaryOutput,
