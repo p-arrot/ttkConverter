@@ -1,0 +1,132 @@
+[
+  {
+    "name": "llvm",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-msvcrt-x86_64.zip",
+    "sha256": "17db10bd2c0bcbf55e5e4382475190165d0fc90dfe52ca165a51f1dfb1ca19c8"
+  },
+  {
+    "name": "inno",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+    "sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
+  },
+  {
+    "name": "nasm",
+    "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip",
+    "sha256": "3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6"
+  },
+  {
+    "name": "xpdf_source",
+    "url": "https://dl.xpdfreader.com/xpdf-4.06.tar.gz",
+    "sha256": "1c38f527c46caee0f712386d42a885b96a31ed9ce11904e872559859894d137e"
+  },
+  {
+    "name": "xpdf_cmap",
+    "url": "https://dl.xpdfreader.com/xpdf-chinese-simplified.tar.gz",
+    "sha256": "f946b8d1659812d7ed25d235ae9d693b37cd6927f34d72f32284d286ce2813b4"
+  },
+  {
+    "name": "eng",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/eng.traineddata",
+    "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+  },
+  {
+    "name": "chi_sim",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/chi_sim.traineddata",
+    "sha256": "a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730"
+  },
+  {
+    "name": "ffmpeg",
+    "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz",
+    "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
+  },
+  {
+    "name": "x265",
+    "url": "https://bitbucket.org/multicoreware/x265_git/get/4.1.tar.gz",
+    "sha256": "7d23cdcdbd510728202c0dfbf7c51eda26a395de2096c504c2b10d6035711102"
+  },
+  {
+    "name": "x264",
+    "url": "https://codeload.github.com/mirror/x264/tar.gz/31e19f92f00c7003fa115047ce50978bc98c3a0d",
+    "sha256": "d053c9d86988d6bc78237ca5205865c5ddf99c98ef4cd9927eec8f6d388f6dd9"
+  },
+  {
+    "name": "aom",
+    "url": "https://storage.googleapis.com/aom-releases/libaom-3.12.1.tar.gz",
+    "sha256": "9e9775180dec7dfd61a79e00bda3809d43891aee6b2e331ff7f26986207ea22e"
+  },
+  {
+    "name": "vpx",
+    "url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.15.2.tar.gz",
+    "sha256": "26fcd3db88045dee380e581862a6ef106f49b74b6396ee95c2993a260b4636aa"
+  },
+  {
+    "name": "lame",
+    "url": "https://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz",
+    "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+  },
+  {
+    "name": "opus",
+    "url": "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz",
+    "sha256": "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1"
+  },
+  {
+    "name": "vorbis",
+    "url": "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz",
+    "sha256": "0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab"
+  },
+  {
+    "name": "ogg",
+    "url": "https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz",
+    "sha256": "83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638"
+  },
+  {
+    "name": "webp",
+    "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz",
+    "sha256": "7d6fab70cf844bf6769077bd5d7a74893f8ffd4dfb42861745750c63c2a5c92c"
+  },
+  {
+    "name": "zlib",
+    "url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+    "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+  },
+  {
+    "name": "amf",
+    "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/AMF/tar.gz/refs/tags/v1.4.35",
+    "sha256": "5d93101eae5895247bea58cff40bb84424158170ae7f931105666157cc187636"
+  },
+  {
+    "name": "nvcodec",
+    "url": "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/n12.2.72.0",
+    "sha256": "dbeaec433d93b850714760282f1d0992b1254fc3b5a6cb7d76fc1340a1e47563"
+  },
+  {
+    "name": "ChineseSimplified.isl",
+    "url": "https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_3/Files/Languages/Unofficial/ChineseSimplified.isl",
+    "sha256": "7d544b9bb1d142cfa11f2e5d3cc8abe2e55f8e066c5124e3772675aa236e1278"
+  },
+  {
+    "name": "tesseract_source",
+    "url": "https://codeload.github.com/tesseract-ocr/tesseract/tar.gz/refs/tags/5.3.0",
+    "sha256": "7e70870f8341e5ea228af2836ce79a36eefa11b01b56177b4a8997f330c014b8"
+  },
+  {
+    "name": "leptonica_source",
+    "url": "https://codeload.github.com/DanBloomberg/leptonica/tar.gz/refs/tags/1.83.1",
+    "sha256": "4289d0a4224b614010072253531c0455a33a4d7c7a0017fe7825ed382290c0da"
+  },
+  {
+    "name": "libpng_source",
+    "url": "https://codeload.github.com/pnggroup/libpng/tar.gz/refs/tags/v1.6.59",
+    "sha256": "2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5"
+  },
+  {
+    "name": "freetype_source",
+    "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz",
+    "sha256": "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"
+  },
+  {
+    "name": "mingw_w64_source",
+    "url": "https://codeload.github.com/mingw-w64/mingw-w64/tar.gz/41eb042358a52011b35350392130dcdc94a8ead8",
+    "sha256": "f7e94f800f77feee7d20c52027a03e8fa7fef034982cc2fdf12d33752d54e774"
+  }
+]

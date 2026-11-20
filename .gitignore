@@ -1,0 +1,6 @@
+/out/
+/release/
+/.vs/
+/CMakeUserPresets.json
+/assets/cat.png
+/tools/__pycache__/

@@ -1,0 +1,24 @@
+ttkConverter invokes separately packaged command-line tools.
+
+FFmpeg and ffprobe: https://ffmpeg.org/ (see ffmpeg -version and -buildconf).
+The GPL build includes x264, x265, libaom, libvpx, Opus, LAME, Vorbis, WebP and zlib.
+Open-source license texts and corresponding source information accompany the release.
+LLVM MinGW runtime components: https://github.com/mstorsjo/llvm-mingw/releases/tag/20261117
+Winpthreads: https://github.com/mingw-w64/mingw-w64/tree/41eb042358a52011b35350392130dcdc94a8ead8/mingw-w64-libraries/winpthreads
+AMD AMF SDK headers: https://github.com/GPUOpen-LibrariesAndSDKs/AMF/tree/v1.4.35
+NVIDIA FFmpeg codec headers: https://github.com/FFmpeg/nv-codec-headers/tree/n12.2.72.0
+
+Xpdf Tools 4.06: https://www.xpdfreader.com/download.html
+Corresponding source: https://dl.xpdfreader.com/xpdf-4.06.tar.gz
+Chinese character maps: https://dl.xpdfreader.com/xpdf-chinese-simplified.tar.gz
+
+Tesseract 5.3.0: https://github.com/tesseract-ocr/tesseract/tree/5.3.0
+Leptonica 1.83.1: https://github.com/DanBloomberg/leptonica/tree/1.83.1
+PNG 1.6.59: https://github.com/pnggroup/libpng/tree/v1.6.59
+FreeType 2.14.3: https://download.savannah.gnu.org/releases/freetype/
+English and Chinese fast OCR models: https://github.com/tesseract-ocr/tessdata_fast/tree/4.1.0
+
+Inno Setup installation creator: https://jrsoftware.org/isinfo.php
+
+Published downloads and corresponding source archives:
+https://github.com/p-arrot/ttkConverter/releases
